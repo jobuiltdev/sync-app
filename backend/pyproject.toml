@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sync-backend"
+version = "0.1.0"
+description = "Sync marketplace API"
+requires-python = ">=3.14"
+
+# Versions are pinned exactly. They were verified together against Python 3.14.6
+# during the runtime compatibility spike; see docs/architecture.md.
+dependencies = [
+    "Django==5.2.17",
+    "djangorestframework==3.18.0",
+    "djangorestframework-simplejwt==5.5.1",
+    "drf-spectacular==0.30.0",
+    "django-environ==0.14.0",
+    "django-cors-headers==4.9.0",
+    "psycopg[binary]==3.3.4",
+    "redis==8.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-django==4.14.0",
+    "factory-boy==3.3.3",
+    "coverage==7.13.0",
+    "ruff==0.16.2",
+    "mypy==2.3.0",
+    "django-stubs==6.0.9",
+    "djangorestframework-stubs==3.17.1",
+]
+
+# The backend is a deployed application, not a distributable package, so there is
+# nothing for setuptools to build. Declaring no modules keeps `pip install -e .`
+# working purely as a dependency and tooling entry point.
+[tool.setuptools]
+py-modules = []
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+extend-exclude = [".venv", "**/migrations/*"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "DJ",   # flake8-django
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "RUF",
+]
+ignore = [
+    # DRF declares its view and serializer API as mutable class attributes.
+    # Annotating them ClassVar to satisfy this rule contradicts the instance
+    # attributes django-stubs declares on the same names, so mypy then fails.
+    "RUF012",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["apps", "config"]
+
+[tool.mypy]
+python_version = "3.14"
+plugins = ["mypy_django_plugin.main", "mypy_drf_plugin.main"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+exclude = ['^\.venv/', 'migrations/']
+
+[tool.django-stubs]
+django_settings_module = "config.settings.test"
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+python_files = ["test_*.py", "tests.py"]
+testpaths = ["apps", "tests"]
+addopts = "--strict-markers"
+
+[tool.coverage.run]
+source = ["apps", "config"]
+omit = ["*/migrations/*", "*/tests/*", "*/test_*.py"]

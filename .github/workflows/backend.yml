@@ -1,0 +1,74 @@
+name: backend
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: sync_test
+          POSTGRES_USER: sync
+          POSTGRES_PASSWORD: sync
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sync -d sync_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # These point at the ephemeral service containers above. The test settings
+      # supply their own throwaway SECRET_KEY, so CI needs no secrets at all.
+      DATABASE_URL: postgres://sync:sync@localhost:5432/sync_test
+      REDIS_URL: redis://localhost:6379/0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Format check
+        run: ruff format --check .
+
+      - name: Type check
+        run: mypy .
+
+      - name: Test
+        run: pytest
+
+      - name: Validate OpenAPI schema
+        run: python manage.py spectacular --file schema.yml --validate
