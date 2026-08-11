@@ -12,6 +12,9 @@ app_name = "v1"
 urlpatterns = [
     path("", include("apps.common.urls")),
     path("auth/", include("apps.accounts.urls")),
+    path("catalog/", include("apps.catalog.urls")),
+    path("customer/", include("apps.accounts.customer_urls")),
+    path("provider/", include("apps.providers.urls")),
     path("schema/", SpectacularAPIView.as_view(), name="schema"),
     path("docs/", SpectacularSwaggerView.as_view(url_name="v1:schema"), name="docs"),
 ]

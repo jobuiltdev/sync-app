@@ -1,54 +1,63 @@
-import { useQuery } from '@tanstack/react-query';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { fetchHealth, healthKeys } from '@/api/endpoints/health';
+import type { ServiceSummary } from '@/api/endpoints/catalog';
 import { Button } from '@/components/ui/Button';
 import { useCurrentUser, useSignOut } from '@/features/auth/hooks';
+import { useCategories } from '@/features/catalog/hooks';
+import { formatPriceFrom } from '@/lib/money';
 import { colors, fontSizes, fontWeights, radii, spacing } from '@/theme/tokens';
 
 /**
- * Foundation screen for a signed-in user.
+ * Foundation screen.
  *
- * It exists to prove the authentication path end to end: a stored session
- * authenticates a request, the server identifies the caller, and signing out
- * clears both sides. The real customer home replaces this in M2.
+ * Proves the core domain is consumable end to end: the catalog loads from the
+ * API, prices render through one formatter, and the signed-in account is
+ * identified. The real customer home, with search and booking entry points,
+ * replaces this once the booking flow exists.
  */
 export default function HomeScreen() {
-  const { data: user, isPending, error } = useCurrentUser();
-  const health = useQuery({ queryKey: healthKeys.root, queryFn: ({ signal }) => fetchHealth(signal) });
+  const { data: user } = useCurrentUser();
+  const categories = useCategories();
   const signOut = useSignOut();
 
   return (
     <SafeAreaView style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
-          <Text style={styles.eyebrow}>Signed in</Text>
-          <Text style={styles.title}>{user?.full_name || user?.email || 'Your account'}</Text>
+          <Text style={styles.eyebrow}>Signed in as {user?.email ?? 'your account'}</Text>
+          <Text style={styles.title}>What do you need?</Text>
         </View>
 
-        {isPending ? (
+        {categories.isPending ? (
           <View style={styles.card}>
             <ActivityIndicator color={colors.accent} />
           </View>
-        ) : error ? (
+        ) : categories.error ? (
           <View style={[styles.card, styles.cardError]}>
-            <Text style={styles.cardTitle}>Could not load your account</Text>
-            <Text style={styles.body}>{error.message}</Text>
+            <Text style={styles.cardTitle}>Could not load services</Text>
+            <Text style={styles.body}>{categories.error.message}</Text>
+            <Button label="Try again" variant="secondary" onPress={() => categories.refetch()} />
+          </View>
+        ) : categories.data.length === 0 ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>No services yet</Text>
+            <Text style={styles.body}>Services will appear here once they are published.</Text>
           </View>
         ) : (
-          <View style={styles.card}>
-            <Row label="Email" value={user.email} />
-            <Row label="Phone" value={user.phone ?? 'Not added'} />
-            <Row label="Email verified" value={user.is_email_verified ? 'Yes' : 'Not yet'} />
-            <Row label="Phone verified" value={user.is_phone_verified ? 'Yes' : 'Not yet'} />
-          </View>
+          categories.data.map((category) => (
+            <View key={category.id} style={styles.section}>
+              <Text style={styles.sectionTitle}>{category.name}</Text>
+              {category.services.length === 0 ? (
+                <Text style={styles.muted}>Nothing available here yet.</Text>
+              ) : (
+                category.services.map((service) => (
+                  <ServiceRow key={service.id} service={service} />
+                ))
+              )}
+            </View>
+          ))
         )}
-
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>API</Text>
-          <Row label="Service" value={health.data?.status ?? 'checking'} />
-        </View>
 
         <Button
           label="Sign out"
@@ -61,31 +70,40 @@ export default function HomeScreen() {
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function ServiceRow({ service }: { service: ServiceSummary }) {
   return (
-    <View style={styles.row}>
-      <Text style={styles.rowLabel}>{label}</Text>
-      <Text style={styles.rowValue}>{value}</Text>
-    </View>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${service.name}, ${formatPriceFrom(service.base_price_kobo, service.pricing_model)}`}
+      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+    >
+      <View style={styles.rowText}>
+        <Text style={styles.rowTitle}>{service.name}</Text>
+        {service.summary ? <Text style={styles.muted}>{service.summary}</Text> : null}
+      </View>
+      <Text style={styles.price}>
+        {formatPriceFrom(service.base_price_kobo, service.pricing_model)}
+      </Text>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.ground },
-  content: { padding: spacing.xl, gap: spacing.lg },
+  content: { padding: spacing.xl, gap: spacing.xl },
   header: { gap: spacing.xs, paddingTop: spacing.lg },
-  eyebrow: {
-    fontSize: fontSizes.footnote,
-    fontWeight: fontWeights.medium,
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-    color: colors.accent,
-  },
+  eyebrow: { fontSize: fontSizes.footnote, color: colors.inkMuted },
   title: {
-    fontSize: fontSizes.title2,
+    fontSize: fontSizes.title1,
     fontWeight: fontWeights.bold,
     color: colors.ink,
     letterSpacing: -0.5,
+  },
+  section: { gap: spacing.sm },
+  sectionTitle: {
+    fontSize: fontSizes.callout,
+    fontWeight: fontWeights.semibold,
+    color: colors.ink,
   },
   card: {
     backgroundColor: colors.surface,
@@ -93,24 +111,34 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.hairline,
     padding: spacing.lg,
-    gap: spacing.sm,
+    gap: spacing.md,
   },
   cardError: { borderColor: colors.danger, backgroundColor: colors.dangerSoft },
   cardTitle: { fontSize: fontSizes.callout, fontWeight: fontWeights.semibold, color: colors.ink },
   body: { fontSize: fontSizes.body, color: colors.inkSoft },
+  muted: { fontSize: fontSizes.footnote, color: colors.inkMuted },
   row: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: spacing.xs,
+    justifyContent: 'space-between',
     gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radii.card,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    minHeight: 64,
   },
-  rowLabel: { fontSize: fontSizes.footnote, color: colors.inkMuted },
-  rowValue: {
+  rowPressed: { backgroundColor: colors.surfaceSunk },
+  rowText: { flexShrink: 1, gap: 2 },
+  rowTitle: { fontSize: fontSizes.body, fontWeight: fontWeights.medium, color: colors.ink },
+  price: {
     fontSize: fontSizes.footnote,
-    fontWeight: fontWeights.medium,
-    color: colors.ink,
-    flexShrink: 1,
+    fontWeight: fontWeights.semibold,
+    color: colors.accent,
+    // Prices line up in a column, so tabular figures stop them shifting width.
+    fontVariant: ['tabular-nums'],
     textAlign: 'right',
   },
 });

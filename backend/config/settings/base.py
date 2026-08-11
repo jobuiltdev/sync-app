@@ -36,6 +36,8 @@ INSTALLED_APPS = [
     "corsheaders",
     "apps.common",
     "apps.accounts",
+    "apps.catalog",
+    "apps.providers",
 ]
 
 MIDDLEWARE = [
@@ -122,6 +124,12 @@ REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": ("rest_framework.renderers.JSONRenderer",),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "EXCEPTION_HANDLER": "apps.common.exceptions.api_exception_handler",
+    # Page numbers suit the catalog, which is small, stable and browsed by a person.
+    # Time-ordered feeds such as booking history move to cursor pagination when they
+    # arrive, since page numbers shift under inserts. Small owned collections opt out
+    # entirely with pagination_class = None.
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 20,
 }
 
 SIMPLE_JWT = {

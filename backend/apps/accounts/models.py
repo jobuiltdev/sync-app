@@ -5,7 +5,10 @@ from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, Permis
 from django.db import models
 from django.utils import timezone
 
+from apps.accounts.address import Address
 from apps.accounts.identity import normalize_email, normalize_phone
+
+__all__ = ["Address", "User", "UserManager"]
 
 
 class UserManager(BaseUserManager["User"]):

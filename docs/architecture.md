@@ -701,6 +701,22 @@ fix it. That is the point of doing M3 on a single vertical.
 
 ### Open
 
+0. **Which requirements gate which capabilities. Still undecided, deliberately.**
+   Nothing in the codebase gates on verification today. The domain can represent the
+   state (`User.email_verified_at`, `User.phone_verified_at`,
+   `ProviderProfile.verification_status`) but no code reads it to allow or refuse an
+   action, and no default has been invented.
+
+   When the decision is made, exactly one module consumes it: `apps/accounts/policy.py`,
+   holding the capability table in section 3. The call sites that will read it are the
+   booking creation endpoint (M3), the offer-accept endpoint (M4) and the payout
+   request endpoint (M5). Until then `ProviderProfile.transition_verification()` is the
+   only thing that moves verification state, and it is driven by admin review in M4
+   rather than by any customer-facing rule.
+
+   The specific question to answer: does a first booking require a verified phone, or
+   only a verified email, with phone demanded at the point a provider needs to call.
+
 1. **Local infrastructure.** Docker Compose is the chosen approach and the file is in
    the repository, but Docker Desktop must be installed on each development machine.
 2. **Escrow posture.** Holding customer funds between payment and completion is what
