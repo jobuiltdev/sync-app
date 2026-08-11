@@ -1,0 +1,135 @@
+from typing import Any
+
+from django.contrib.auth import authenticate, password_validation
+from django.core.exceptions import ValidationError as DjangoValidationError
+from rest_framework import serializers
+
+from apps.accounts.errors import AccountInactive, InvalidCredentials
+from apps.accounts.identity import normalize_email, normalize_phone
+from apps.accounts.models import User
+
+
+class UserSerializer(serializers.ModelSerializer):
+    """The shape of a user everywhere the API returns one."""
+
+    full_name = serializers.CharField(read_only=True)
+    is_email_verified = serializers.BooleanField(read_only=True)
+    is_phone_verified = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "email",
+            "phone",
+            "first_name",
+            "last_name",
+            "full_name",
+            "is_email_verified",
+            "is_phone_verified",
+            "email_verified_at",
+            "phone_verified_at",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class TokenPairSerializer(serializers.Serializer):
+    access = serializers.CharField(read_only=True)
+    refresh = serializers.CharField(read_only=True)
+
+
+class AuthenticatedUserSerializer(serializers.Serializer):
+    """Returned by register and login.
+
+    Both hand back the user alongside the tokens so the app can render an
+    authenticated screen without a second round trip, which matters on connections
+    where every request is a chance to fail.
+    """
+
+    user = UserSerializer(read_only=True)
+    tokens = TokenPairSerializer(read_only=True)
+
+
+class RegistrationSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True, style={"input_type": "password"})
+    first_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    last_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    phone = serializers.CharField(required=False, allow_blank=True, max_length=20)
+
+    def validate_email(self, value: str) -> str:
+        email = normalize_email(value)
+        if User.objects.filter(email=email).exists():
+            raise serializers.ValidationError("An account with this email already exists.")
+        return email
+
+    def validate_phone(self, value: str) -> str | None:
+        if not value.strip():
+            return None
+        try:
+            phone = normalize_phone(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages) from exc
+        if User.objects.filter(phone=phone).exists():
+            raise serializers.ValidationError("An account with this phone number already exists.")
+        return phone
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        # Run password validation against an unsaved instance so the similarity
+        # validator can compare against this user's own email and name rather than
+        # nothing, which is the only way that check does anything useful.
+        candidate = User(
+            email=attrs.get("email", ""),
+            phone=attrs.get("phone"),
+            first_name=attrs.get("first_name", ""),
+            last_name=attrs.get("last_name", ""),
+        )
+        try:
+            password_validation.validate_password(attrs["password"], candidate)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"password": list(exc.messages)}) from exc
+        return attrs
+
+    def create(self, validated_data: dict[str, Any]) -> User:
+        return User.objects.create_user(
+            email=validated_data["email"],
+            password=validated_data["password"],
+            phone=validated_data.get("phone"),
+            first_name=validated_data.get("first_name", ""),
+            last_name=validated_data.get("last_name", ""),
+        )
+
+
+class LoginSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True, style={"input_type": "password"})
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        # authenticate() runs the password hasher even when no user matches, so a
+        # wrong address and a wrong password take the same time. Checking existence
+        # first would leak which addresses are registered through response timing.
+        user = authenticate(
+            request=self.context.get("request"),
+            username=normalize_email(attrs["email"]),
+            password=attrs["password"],
+        )
+
+        if user is None:
+            # ModelBackend returns None for an inactive user too, so distinguish the
+            # two here: someone whose account was disabled needs to be told that,
+            # not left retyping a password that was correct all along.
+            if User.objects.filter(email=normalize_email(attrs["email"]), is_active=False).exists():
+                raise AccountInactive
+            raise InvalidCredentials
+
+        attrs["user"] = user
+        return attrs
+
+
+class LogoutSerializer(serializers.Serializer):
+    refresh = serializers.CharField(write_only=True)
+
+
+class RefreshRequestSerializer(serializers.Serializer):
+    refresh = serializers.CharField(write_only=True)

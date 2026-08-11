@@ -19,6 +19,8 @@ dependencies = [
     "django-cors-headers==4.9.0",
     "psycopg[binary]==3.3.4",
     "redis==8.1.0",
+    "argon2-cffi==25.1.0",
+    "phonenumbers==9.0.36",
 ]
 
 [project.optional-dependencies]

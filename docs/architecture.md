@@ -481,6 +481,9 @@ Versioned at `/api/v1/` and namespaced by audience. Customer and provider need
 different serializers, permissions and shapes of the same booking, so separating them
 beats one polymorphic endpoint set full of role branching.
 
+Every route carries a trailing slash, matching Django's `APPEND_SLASH` default. The
+paths below are written without one for readability; the implemented routes have it.
+
 ### Authentication
 
 ```

@@ -11,6 +11,9 @@ export interface RequestOptions {
   idempotencyKey?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** Opts out of the refresh-and-retry below. The auth endpoints set this: a
+   *  refresh call that tried to refresh on failure would recurse forever. */
+  skipAuthRefresh?: boolean;
 }
 
 /**
@@ -22,10 +25,40 @@ export interface RequestOptions {
  */
 type TokenProvider = () => string | null | Promise<string | null>;
 
+/** Renews the session. Resolves true when a new access token is available. */
+type TokenRefresher = () => Promise<boolean>;
+
 let getAccessToken: TokenProvider = () => null;
+let refreshSession: TokenRefresher | null = null;
+
+/** Shared so that several requests failing at once trigger one refresh, not one
+ *  each. Without this, an authenticated screen firing four queries on resume
+ *  would spend four refresh tokens and blacklist three of them. */
+let refreshInFlight: Promise<boolean> | null = null;
 
 export function setAccessTokenProvider(provider: TokenProvider): void {
   getAccessToken = provider;
+}
+
+export function setTokenRefresher(refresher: TokenRefresher | null): void {
+  refreshSession = refresher;
+}
+
+/** Test seam. Clears the deduplication state between cases. */
+export function resetAuthPlumbing(): void {
+  getAccessToken = () => null;
+  refreshSession = null;
+  refreshInFlight = null;
+}
+
+async function refreshOnce(): Promise<boolean> {
+  if (!refreshSession) return false;
+
+  refreshInFlight ??= refreshSession().finally(() => {
+    refreshInFlight = null;
+  });
+
+  return refreshInFlight;
 }
 
 async function parseBody(response: Response): Promise<unknown> {
@@ -39,7 +72,11 @@ async function parseBody(response: Response): Promise<unknown> {
   }
 }
 
-export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+async function send(
+  url: string,
+  options: RequestOptions,
+  token: string | null,
+): Promise<{ response: Response; payload: unknown }> {
   const { method = 'GET', body, idempotencyKey, signal, timeoutMs = API_TIMEOUT_MS } = options;
 
   const headers: Record<string, string> = {
@@ -49,14 +86,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
-
-  const token = await getAccessToken();
   if (token) headers.Authorization = `Bearer ${token}`;
-
-  // Resolved before the try block on purpose: a missing EXPO_PUBLIC_API_URL is a
-  // configuration mistake, and catching it below would disguise it as the network
-  // being down, which sends whoever hits it looking in entirely the wrong place.
-  const url = `${resolveApiBaseUrl()}${path}`;
 
   const timeoutController = new AbortController();
   const timeout = setTimeout(() => timeoutController.abort(), timeoutMs);
@@ -87,13 +117,28 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     signal?.removeEventListener('abort', onExternalAbort);
   }
 
-  const payload = await parseBody(response);
+  return { response, payload: await parseBody(response) };
+}
 
-  if (!response.ok) {
-    throw toApiError(response.status, payload);
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  // Resolved before any request work on purpose: a missing EXPO_PUBLIC_API_URL is a
+  // configuration mistake, and letting it fall into the network error path below
+  // would disguise it as the network being down.
+  const url = `${resolveApiBaseUrl()}${path}`;
+
+  let attempt = await send(url, options, await getAccessToken());
+
+  // A 401 on an authenticated call usually means the access token aged out rather
+  // than that the session is over. Renew once and replay before surfacing it.
+  if (attempt.response.status === 401 && !options.skipAuthRefresh && (await refreshOnce())) {
+    attempt = await send(url, options, await getAccessToken());
   }
 
-  return payload as T;
+  if (!attempt.response.ok) {
+    throw toApiError(attempt.response.status, attempt.payload);
+  }
+
+  return attempt.payload as T;
 }
 
 export const api = {

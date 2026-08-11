@@ -5,12 +5,15 @@ import { useEffect, useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { setAccessTokenProvider } from '@/api/client';
+import { setAccessTokenProvider, setTokenRefresher } from '@/api/client';
 import { createQueryClient } from '@/lib/query-client';
-import { getAccessToken, useSessionStore } from '@/state/session';
+import { getAccessToken, renewSession, useSessionStore } from '@/state/session';
 import { colors } from '@/theme/tokens';
 
+// Registered at module scope so the API layer is wired before any request can be
+// made, including one fired by a screen that mounts on the very first frame.
 setAccessTokenProvider(getAccessToken);
+setTokenRefresher(renewSession);
 
 export default function RootLayout() {
   // One client for the lifetime of the app. A lazy initialiser rather than module
@@ -34,7 +37,11 @@ export default function RootLayout() {
               headerTintColor: colors.ink,
               contentStyle: { backgroundColor: colors.ground },
             }}
-          />
+          >
+            <Stack.Screen name="index" options={{ headerShown: false }} />
+            <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+            <Stack.Screen name="(app)" options={{ headerShown: false }} />
+          </Stack>
         </QueryClientProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
