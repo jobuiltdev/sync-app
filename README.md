@@ -140,14 +140,32 @@ time, so a running server will not pick up the change.
 
 Windows blocks inbound connections to Python by default, which presents as the app
 timing out while the same URL works fine in a browser on the development machine.
-Run once, in an elevated PowerShell:
+
+A firewall rule only applies to the network profile it is scoped to, so check which
+profile your active adapter is on first:
+
+```powershell
+Get-NetConnectionProfile | Select-Object InterfaceAlias, NetworkCategory
+```
+
+Then create the rule for that profile, in an elevated PowerShell:
 
 ```powershell
 New-NetFirewallRule -DisplayName "Sync dev server" -Direction Inbound `
-  -LocalPort 8000 -Protocol TCP -Action Allow -Profile Private
+  -LocalPort 8000 -Protocol TCP -Action Allow -Profile Public
 ```
 
-Scoped to the Private profile so it does not open the port on public networks.
+Substitute `Private` if that is what the previous command reported. Getting this
+wrong is a silent failure: the rule is created, appears in the firewall list, and
+does nothing.
+
+Note that phone hotspots, cafes and airports all report Public, and Windows treats
+Public as untrusted for good reason. Opening a port there exposes it to everyone on
+that network. Remove the rule when you no longer need it:
+
+```powershell
+Remove-NetFirewallRule -DisplayName "Sync dev server"
+```
 
 **5. Confirm**
 

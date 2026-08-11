@@ -50,8 +50,18 @@ class ErrorEnvelopeTests(APITestCase):
 
 
 class ErrorEnvelopeIntegrationTests(APITestCase):
-    def test_unauthenticated_request_returns_the_envelope(self):
-        response = self.client.get("/api/v1/schema/")
+    """Proves the handler is wired into DRF, not just that it works in isolation.
 
-        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
-        self.assertEqual(response.data["error"]["code"], "NOT_AUTHENTICATED")
+    The route used has to behave the same under every settings module, since this
+    suite runs under dev settings via `manage.py test` and under test settings via
+    pytest. An unsupported method on the health endpoint is a real DRF error that
+    no environment changes.
+    """
+
+    def test_a_real_request_error_returns_the_envelope(self):
+        response = self.client.post("/api/v1/health/")
+
+        self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        self.assertEqual(response.data["error"]["code"], "METHOD_NOT_ALLOWED")
+        self.assertEqual(response.data["error"]["details"], {})
+        self.assertNotIn("detail", response.data)
