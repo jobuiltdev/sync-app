@@ -96,6 +96,59 @@ COMPLETED -> DISPUTED
 
 `EN_ROUTE` is optional and declared per service by its spec.
 
+### Booking, as implemented in M3
+
+The lifecycle above is the full canonical set. M3 implements the subset a booking
+reaches without quoting, payment or matching:
+
+```
+ASSIGNED -> [EN_ROUTE] -> IN_PROGRESS -> AWAITING_CONFIRMATION -> COMPLETED
+ASSIGNED, EN_ROUTE -> CANCELLED
+```
+
+`EN_ROUTE` is optional because `ASSIGNED` reaches `IN_PROGRESS` directly, so a
+service with no travel step never uses it. No per-service flag is needed.
+
+**Actors are part of the table, not just edges.** Only a provider moves work
+forward; only a customer confirms it is done. A provider closing their own job
+would make the confirmation meaningless. `apps/bookings/state.py` holds the whole
+table, and `services.transition()` is the only way a status changes: the API never
+accepts a status from a client, every move is a named action endpoint, and an
+illegal one returns `ILLEGAL_TRANSITION` with the booking untouched.
+
+**A booking starts ASSIGNED** because the customer picks the provider directly.
+When M4 adds offers and provider acceptance, `MATCHING` is inserted before it and
+the table gains rows; nothing else changes.
+
+**The address is copied, not referenced.** A booking records where a job was
+requested. An `Address` is a mutable row a customer edits or deletes freely, so
+pointing at it would mean a completed job silently moves house when they update
+their flat number. The snapshot carries street, landmark, area, LGA, state,
+coordinates and directions. `source_address` keeps the link and is allowed to go
+null. Verified live: editing and deleting the source leave the booking intact.
+
+**`details` is validated against the spec registered for the chosen service**, and
+`spec_key` is copied onto the booking so the payload stays interpretable if the
+Service is later repointed. A payload valid for laundry is not a valid cleaning
+request, and that is enforced at creation.
+
+**Booking requires a verified phone.** The rule lives in `apps/accounts/policy.py`
+as `Capability.CREATE_BOOKING -> [PHONE_VERIFIED]`, checked before any write, so a
+refusal persists nothing. Email verification is deliberately not required: a
+provider on their way needs to reach the customer by phone, and demanding both
+costs conversion at the moment of commitment. M4 and M5 add capabilities to the
+same table without touching the booking domain.
+
+**Deletion.** `customer`, `provider` and `service` are all `PROTECT`. A booking is
+a record of something that happened between two people and must outlive a profile
+tidy-up, so an account with bookings is deactivated rather than deleted.
+
+Deferred from the booking domain, with the milestone that owns each: quotes and
+pricing (M5), offers, matching and provider acceptance (M4), availability (M4), the
+`Cancellation` model with fees (M5), `DISPUTED` (M7), and `DRAFT` / `QUOTED` /
+`PENDING_PAYMENT` / `MATCHING` / `EXPIRED`, which are defined above but have no
+meaning until the milestones that produce them exist.
+
 ### How verticals stay modular
 
 This is the load-bearing idea. The `Booking` model never learns the vocabulary of
@@ -701,21 +754,21 @@ fix it. That is the point of doing M3 on a single vertical.
 
 ### Open
 
-0. **Which requirements gate which capabilities. Still undecided, deliberately.**
-   Nothing in the codebase gates on verification today. The domain can represent the
-   state (`User.email_verified_at`, `User.phone_verified_at`,
-   `ProviderProfile.verification_status`) but no code reads it to allow or refuse an
-   action, and no default has been invented.
+0. **How a phone actually gets verified. Decided for booking, unbuilt.**
+   The policy is settled and enforced: booking requires `PHONE_VERIFIED`, and
+   `apps/accounts/policy.py` is the single place that says so. What does not exist
+   is the flow that sets `phone_verified_at`. There is no OTP endpoint and no SMS
+   provider, so today the only way an account becomes verified is a direct write.
 
-   When the decision is made, exactly one module consumes it: `apps/accounts/policy.py`,
-   holding the capability table in section 3. The call sites that will read it are the
-   booking creation endpoint (M3), the offer-accept endpoint (M4) and the payout
-   request endpoint (M5). Until then `ProviderProfile.transition_verification()` is the
-   only thing that moves verification state, and it is driven by admin review in M4
-   rather than by any customer-facing rule.
+   That leaves a real gap in the product: a customer who registers cannot reach the
+   point of booking on their own. The verification challenge model, the request and
+   confirm endpoints, and an SMS provider are needed before launch. The mobile app
+   routes a refused booking to a screen that explains this rather than failing
+   silently.
 
-   The specific question to answer: does a first booking require a verified phone, or
-   only a verified email, with phone demanded at the point a provider needs to call.
+   Still open beyond booking: whether any capability should require
+   `EMAIL_VERIFIED`, and what `ACCEPT_JOB` (M4) and `REQUEST_PAYOUT` (M5) demand.
+   Each is a row in the same table.
 
 1. **Local infrastructure.** Docker Compose is the chosen approach and the file is in
    the repository, but Docker Desktop must be installed on each development machine.

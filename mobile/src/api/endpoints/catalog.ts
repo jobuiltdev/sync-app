@@ -64,7 +64,26 @@ export function fetchService(slug: string, signal?: AbortSignal): Promise<Servic
   return api.get<ServiceDetail>(`/api/v1/catalog/services/${slug}/`, { signal });
 }
 
+/** Providers a customer can choose for a service. Discovery only: no ranking,
+ *  no availability, no offers. Automatic matching arrives in M4. */
+export interface ServiceProvider {
+  id: string;
+  display_name: string;
+  bio: string;
+  provider_type: string;
+  experience_years: number | null;
+  price_kobo: number;
+}
+
+export function fetchServiceProviders(
+  slug: string,
+  signal?: AbortSignal,
+): Promise<ServiceProvider[]> {
+  return api.get<ServiceProvider[]>(`/api/v1/catalog/services/${slug}/providers/`, { signal });
+}
+
 export const catalogKeys = {
   categories: ['catalog', 'categories'] as const,
   service: (slug: string) => ['catalog', 'service', slug] as const,
+  providers: (slug: string) => ['catalog', 'service', slug, 'providers'] as const,
 };

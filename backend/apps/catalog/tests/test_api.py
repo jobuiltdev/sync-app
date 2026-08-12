@@ -1,6 +1,7 @@
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from apps.bookings.tests.factories import make_provider_offering
 from apps.catalog.tests.factories import make_category, make_option, make_service
 
 CATEGORIES_URL = "/api/v1/catalog/categories/"
@@ -111,5 +112,53 @@ class ServiceDetailTests(APITestCase):
         make_service(slug="retired", is_active=False)
 
         response = self.client.get(f"{SERVICES_URL}retired/")
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class ServiceProviderDiscoveryTests(APITestCase):
+    def setUp(self):
+        self.service = make_service(slug="standard-clean")
+
+    def url(self, slug: str = "standard-clean") -> str:
+        return f"{SERVICES_URL}{slug}/providers/"
+
+    def test_lists_providers_offering_the_service_without_an_account(self):
+        make_provider_offering(self.service, email="one@example.com")
+
+        response = self.client.get(self.url())
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["display_name"], "Ada Cleaning Services")
+
+    def test_reports_the_price_this_provider_charges(self):
+        offering = make_provider_offering(self.service, email="two@example.com")
+        offered = offering.offered_services.get()
+        offered.price_override_kobo = 1_200_000
+        offered.save()
+
+        response = self.client.get(self.url())
+
+        self.assertEqual(response.data[0]["price_kobo"], 1_200_000)
+
+    def test_a_provider_who_stopped_offering_it_is_hidden(self):
+        offering = make_provider_offering(self.service, email="three@example.com")
+        offering.offered_services.update(is_active=False)
+
+        response = self.client.get(self.url())
+
+        self.assertEqual(len(response.data), 0)
+
+    def test_providers_of_another_service_are_not_listed(self):
+        other = make_service(slug="deep-clean")
+        make_provider_offering(other, email="four@example.com")
+
+        response = self.client.get(self.url())
+
+        self.assertEqual(len(response.data), 0)
+
+    def test_an_unknown_service_is_a_404(self):
+        response = self.client.get(self.url("teleportation"))
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)

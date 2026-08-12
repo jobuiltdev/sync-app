@@ -41,10 +41,16 @@ class ServiceTests(TestCase):
         self.assertEqual(list(category.services.all()), [service])
 
     def test_slug_is_unique_across_categories(self):
+        # Built directly rather than through the factory, which reuses by slug.
         make_service(slug="deep-clean")
 
         with self.assertRaises(IntegrityError), transaction.atomic():
-            make_service(make_category("beauty"), slug="deep-clean")
+            Service.objects.create(
+                category=make_category("beauty"),
+                slug="deep-clean",
+                name="Deep Clean",
+                spec_key="beauty",
+            )
 
     def test_base_price_cannot_be_negative(self):
         with self.assertRaises(IntegrityError), transaction.atomic():

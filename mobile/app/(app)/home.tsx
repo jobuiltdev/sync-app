@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -17,6 +18,7 @@ import { colors, fontSizes, fontWeights, radii, spacing } from '@/theme/tokens';
  * replaces this once the booking flow exists.
  */
 export default function HomeScreen() {
+  const router = useRouter();
   const { data: user } = useCurrentUser();
   const categories = useCategories();
   const signOut = useSignOut();
@@ -52,12 +54,18 @@ export default function HomeScreen() {
                 <Text style={styles.muted}>Nothing available here yet.</Text>
               ) : (
                 category.services.map((service) => (
-                  <ServiceRow key={service.id} service={service} />
+                  <ServiceRow
+                    key={service.id}
+                    service={service}
+                    onPress={() => router.push(`/book/${service.slug}`)}
+                  />
                 ))
               )}
             </View>
           ))
         )}
+
+        <Button label="Your bookings" variant="secondary" onPress={() => router.push('/bookings')} />
 
         <Button
           label="Sign out"
@@ -70,11 +78,12 @@ export default function HomeScreen() {
   );
 }
 
-function ServiceRow({ service }: { service: ServiceSummary }) {
+function ServiceRow({ service, onPress }: { service: ServiceSummary; onPress: () => void }) {
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${service.name}, ${formatPriceFrom(service.base_price_kobo, service.pricing_model)}`}
+      onPress={onPress}
       style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
     >
       <View style={styles.rowText}>

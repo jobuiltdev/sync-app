@@ -1,4 +1,5 @@
 from django.db.models import Prefetch, QuerySet
+from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework.generics import ListAPIView, RetrieveAPIView
 from rest_framework.permissions import AllowAny
@@ -7,8 +8,10 @@ from apps.catalog.models import Service, ServiceCategory
 from apps.catalog.serializers import (
     ServiceCategorySerializer,
     ServiceDetailSerializer,
+    ServiceProviderSerializer,
     ServiceSummarySerializer,
 )
+from apps.providers.models import ProviderService
 
 
 class CategoryListView(ListAPIView):
@@ -79,6 +82,35 @@ class ServiceDetailView(RetrieveAPIView):
     @extend_schema(
         operation_id="catalog_service",
         summary="One service, with its options and request field schema",
+        auth=[],
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class ServiceProviderListView(ListAPIView):
+    """Providers offering one service.
+
+    Open like the rest of the catalog, so a customer can see who is available and
+    at what price before committing to an account.
+    """
+
+    authentication_classes: list[type] = []
+    permission_classes = [AllowAny]
+    serializer_class = ServiceProviderSerializer
+    pagination_class = None
+
+    def get_queryset(self) -> QuerySet[ProviderService]:
+        service = get_object_or_404(Service, slug=self.kwargs["slug"], is_active=True)
+        return (
+            ProviderService.objects.filter(service=service, is_active=True)
+            .select_related("provider", "service")
+            .order_by("provider__display_name")
+        )
+
+    @extend_schema(
+        operation_id="catalog_service_providers",
+        summary="Providers offering this service",
         auth=[],
     )
     def get(self, request, *args, **kwargs):

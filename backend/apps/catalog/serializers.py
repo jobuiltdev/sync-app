@@ -63,6 +63,21 @@ class ServiceDetailSerializer(serializers.ModelSerializer):
         return service.spec.details_schema()
 
 
+class ServiceProviderSerializer(serializers.Serializer):
+    """A provider a customer can choose for a service.
+
+    Discovery, not matching. There is no ranking, no availability and no offer
+    here: the customer picks directly, and the automatic path arrives in M4.
+    """
+
+    id = serializers.UUIDField(source="provider.id", read_only=True)
+    display_name = serializers.CharField(source="provider.display_name", read_only=True)
+    bio = serializers.CharField(source="provider.bio", read_only=True)
+    provider_type = serializers.CharField(source="provider.provider_type", read_only=True)
+    experience_years = serializers.IntegerField(read_only=True)
+    price_kobo = serializers.IntegerField(source="effective_price_kobo", read_only=True)
+
+
 class ServiceCategorySerializer(serializers.ModelSerializer):
     services = serializers.SerializerMethodField()
 

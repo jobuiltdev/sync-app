@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     "apps.accounts",
     "apps.catalog",
     "apps.providers",
+    "apps.bookings",
 ]
 
 MIDDLEWARE = [
@@ -154,6 +155,11 @@ SPECTACULAR_SETTINGS = {
     "SERVE_PERMISSIONS": ["rest_framework.permissions.IsAdminUser"],
     "COMPONENT_SPLIT_REQUEST": True,
     "SCHEMA_PATH_PREFIX": "/api/v1",
+    # Booking status appears on several fields. Naming it once stops the generator
+    # emitting a differently named enum component per field.
+    "ENUM_NAME_OVERRIDES": {
+        "BookingStatus": "apps.bookings.state.BookingStatus",
+    },
 }
 
 CORS_ALLOWED_ORIGINS: list[str] = env.list("DJANGO_CORS_ALLOWED_ORIGINS", default=[])

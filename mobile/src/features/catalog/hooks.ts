@@ -7,7 +7,12 @@ import {
   deleteAddress,
   fetchAddresses,
 } from '@/api/endpoints/addresses';
-import { catalogKeys, fetchCategories, fetchService } from '@/api/endpoints/catalog';
+import {
+  catalogKeys,
+  fetchCategories,
+  fetchService,
+  fetchServiceProviders,
+} from '@/api/endpoints/catalog';
 
 /** The catalog is public and changes rarely, so it is cached longer than the
  *  default and does not require a session. */
@@ -24,6 +29,14 @@ export function useService(slug: string) {
     queryKey: catalogKeys.service(slug),
     queryFn: ({ signal }) => fetchService(slug, signal),
     staleTime: 5 * 60 * 1000,
+    enabled: Boolean(slug),
+  });
+}
+
+export function useServiceProviders(slug: string) {
+  return useQuery({
+    queryKey: catalogKeys.providers(slug),
+    queryFn: ({ signal }) => fetchServiceProviders(slug, signal),
     enabled: Boolean(slug),
   });
 }

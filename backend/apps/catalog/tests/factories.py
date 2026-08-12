@@ -23,16 +23,19 @@ def make_service(
     spec_key: str = "cleaning",
     **overrides,
 ) -> Service:
+    # Reuses by slug for the same reason make_category does: several tests build the
+    # same service more than once and care about something else entirely.
     defaults = {
         "category": category or make_category(),
-        "slug": slug,
         "name": slug.replace("-", " ").title(),
         "spec_key": spec_key,
         "booking_modes": BookingMode.SCHEDULED,
         "pricing_model": PricingModel.FIXED,
         "base_price_kobo": 1_500_000,
+        **overrides,
     }
-    return Service.objects.create(**{**defaults, **overrides})
+    service, _ = Service.objects.get_or_create(slug=slug, defaults=defaults)
+    return service
 
 
 def make_option(service: Service, key: str = "ironing", **overrides) -> ServiceOption:
