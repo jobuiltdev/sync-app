@@ -94,6 +94,18 @@ If a dependency is down the endpoint returns `503` and `"status": "degraded"`,
 naming which check failed. The reason goes to the server log rather than the
 response, since the endpoint is unauthenticated.
 
+### Phone verification locally
+
+Booking requires a verified phone number. Locally the console SMS provider prints
+the code to the terminal running the server rather than sending a message:
+
+```
+[sms] verification code for +2348031234567: 481920
+```
+
+Set `SMS_BACKEND` in `.env` to change providers. No real provider is configured, so
+no environment sends real SMS yet.
+
 Also available in development:
 
 - `/api/v1/schema/` OpenAPI document

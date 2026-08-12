@@ -6,9 +6,10 @@ from django.db import models
 from django.utils import timezone
 
 from apps.accounts.address import Address
+from apps.accounts.challenges import VerificationChallenge
 from apps.accounts.identity import normalize_email, normalize_phone
 
-__all__ = ["Address", "User", "UserManager"]
+__all__ = ["Address", "User", "UserManager", "VerificationChallenge"]
 
 
 class UserManager(BaseUserManager["User"]):
@@ -116,6 +117,37 @@ class User(AbstractBaseUser, PermissionsMixin):
                 name="accounts_user_phone_not_empty",
             ),
         ]
+
+    #: The phone as it was when this instance was loaded, so save() can tell
+    #: whether it changed without an extra query.
+    _loaded_phone: str | None = None
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        instance = super().from_db(db, field_names, values)
+        instance._loaded_phone = instance.phone
+        return instance
+
+    def save(self, *args, **kwargs) -> None:
+        """Clears phone verification whenever the number changes.
+
+        Enforced here rather than in the service function so the invariant holds
+        for every path, including the admin and the shell. A number that was never
+        proven must not inherit the previous number's verification.
+        """
+        if (
+            self.pk is not None
+            and self._loaded_phone is not None
+            and self.phone != self._loaded_phone
+        ):
+            self.phone_verified_at = None
+
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None and "phone_verified_at" not in update_fields:
+                kwargs["update_fields"] = [*update_fields, "phone_verified_at"]
+
+        super().save(*args, **kwargs)
+        self._loaded_phone = self.phone
 
     def __str__(self) -> str:
         return self.email

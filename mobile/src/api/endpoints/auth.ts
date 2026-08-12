@@ -62,3 +62,32 @@ export function fetchCurrentUser(signal?: AbortSignal): Promise<AuthUser> {
 export const authKeys = {
   me: ['auth', 'me'] as const,
 };
+
+// --- phone verification ----------------------------------------------------
+
+/** What the client needs to drive the code screen. Never carries the code. */
+export interface VerificationChallenge {
+  challenge_id: string;
+  destination: string;
+  expires_at: string;
+  attempts_remaining: number;
+  resend_available_in_seconds: number;
+}
+
+export function updatePhone(phone: string): Promise<AuthUser> {
+  return api.put<AuthUser>('/api/v1/auth/phone/', { phone });
+}
+
+export function requestPhoneVerification(): Promise<VerificationChallenge> {
+  return api.post<VerificationChallenge>('/api/v1/auth/phone/verification/request/', {});
+}
+
+export function confirmPhoneVerification(
+  challengeId: string,
+  code: string,
+): Promise<AuthUser> {
+  return api.post<AuthUser>('/api/v1/auth/phone/verification/confirm/', {
+    challenge_id: challengeId,
+    code,
+  });
+}

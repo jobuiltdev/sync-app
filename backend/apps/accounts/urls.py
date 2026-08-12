@@ -1,6 +1,15 @@
 from django.urls import path
 
-from apps.accounts.views import LoginView, LogoutView, MeView, RefreshView, RegisterView
+from apps.accounts.views import (
+    LoginView,
+    LogoutView,
+    MeView,
+    PhoneUpdateView,
+    PhoneVerificationConfirmView,
+    PhoneVerificationRequestView,
+    RefreshView,
+    RegisterView,
+)
 
 # Trailing slashes throughout, matching the rest of the API and Django's default
 # APPEND_SLASH behaviour.
@@ -10,4 +19,15 @@ urlpatterns = [
     path("refresh/", RefreshView.as_view(), name="refresh"),
     path("logout/", LogoutView.as_view(), name="logout"),
     path("me/", MeView.as_view(), name="me"),
+    path("phone/", PhoneUpdateView.as_view(), name="phone"),
+    path(
+        "phone/verification/request/",
+        PhoneVerificationRequestView.as_view(),
+        name="phone-verification-request",
+    ),
+    path(
+        "phone/verification/confirm/",
+        PhoneVerificationConfirmView.as_view(),
+        name="phone-verification-confirm",
+    ),
 ]

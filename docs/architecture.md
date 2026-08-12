@@ -305,22 +305,50 @@ keys and audience, and `email_verified` is a hard gate rather than a hint.
 Unlinking applies the same principle in reverse. A user cannot remove their last
 remaining way in, so a Google-only account must set a password first.
 
-### Verification challenges
+### Verification challenges, as implemented
 
-One model covers both channels and every purpose.
+`VerificationChallenge` carries a `channel`, so email verification is a new row
+rather than a second verification architecture. Only PHONE is wired up.
 
-- **Only a hash is stored**, a keyed HMAC compared in constant time. A slow password
-  hash is the wrong tool: a six digit code has too little entropy for slow hashing
-  to add real protection, and it would turn every verification attempt into a
-  deliberate CPU cost. The attempt cap and short expiry are the real defence.
-- **Attempt cap** of five per challenge, after which the challenge is burned.
-- **Short expiry**, ten minutes, with a sixty second resend cooldown.
-- **Layered rate limits**: per account and purpose, per destination, and per IP. The
-  destination limit is what stops a stranger's phone being used as a target.
-- **Supersession**: a new challenge invalidates the previous one for the same user,
-  channel and purpose, so only one code is ever live.
-- **The destination is snapshotted**, so changing an email later does not rewrite the
-  audit trail of what was verified when.
+**The flow.** `PUT /auth/phone/` sets the number, `POST /auth/phone/verification/
+request/` sends a code, `POST /auth/phone/verification/confirm/` submits it. Only a
+correct code sets `phone_verified_at`; no endpoint, serializer or admin field
+writes it, because a customer declaring their own phone verified would make the
+booking gate decorative.
+
+**Only a hash is stored**, produced by the project's configured password hashers,
+so today that is Argon2. An earlier revision of this document specified a keyed
+HMAC, reasoning that a six digit code has too little entropy for slow hashing to
+add much and that hashing on every attempt is a deliberate CPU cost. That cost is
+real and is now bounded by the per-challenge attempt cap, the resend cooldown and
+DRF throttles on both endpoints. Reusing the established hashing infrastructure was
+preferred over a bespoke scheme.
+
+**The code exists in plaintext only inside the request that generates it**, on its
+way to the provider. It is never persisted, never returned by the API, and never
+logged.
+
+- **Attempt cap** of five per challenge, after which it is burned. The failure is
+  raised after the transaction commits, so a wrong guess durably increments the
+  counter rather than rolling it back.
+- **Expiry** of ten minutes, with a sixty second resend cooldown.
+- **Rate limits**: the cooldown is per destination, so changing your number lets
+  you request for the new one immediately while one number cannot be spammed. The
+  hourly send limit is per account, so rotating numbers is not a way around it.
+  All of it is database backed and works with Redis unavailable.
+- **Supersession**: a new challenge retires the previous one, so only one code is
+  ever live.
+- **The destination is snapshotted.** A challenge is bound to the number it was
+  sent to, which is what stops a code for an old number verifying a new one.
+- **Changing the phone clears `phone_verified_at`**, enforced on the model itself
+  so the invariant holds for the admin and the shell, not only the API.
+
+**SMS provider.** The domain depends on `SMSProvider.send_verification_code` and
+never on a vendor. `ConsoleSMSProvider` is the development default and prints the
+code to stdout rather than the logger, since logs get shipped and retained.
+`LocMemSMSProvider` records messages in memory for tests. **No production provider
+is configured.** Setting `SMS_BACKEND` to a real one is a prerequisite for launch,
+and until then no real SMS is sent by any environment.
 
 ### Provider verification
 
@@ -754,21 +782,16 @@ fix it. That is the point of doing M3 on a single vertical.
 
 ### Open
 
-0. **How a phone actually gets verified. Decided for booking, unbuilt.**
-   The policy is settled and enforced: booking requires `PHONE_VERIFIED`, and
-   `apps/accounts/policy.py` is the single place that says so. What does not exist
-   is the flow that sets `phone_verified_at`. There is no OTP endpoint and no SMS
-   provider, so today the only way an account becomes verified is a direct write.
+0. **A production SMS provider.** The verification flow is built and works end to
+   end, but no real provider is configured: `SMS_BACKEND` defaults to the console
+   provider, which prints the code rather than sending it. A customer on a real
+   device cannot receive a code until a provider is chosen, credentialed and set.
+   Termii is the documented intention. This is the last thing standing between the
+   current build and a customer completing a booking unaided.
 
-   That leaves a real gap in the product: a customer who registers cannot reach the
-   point of booking on their own. The verification challenge model, the request and
-   confirm endpoints, and an SMS provider are needed before launch. The mobile app
-   routes a refused booking to a screen that explains this rather than failing
-   silently.
-
-   Still open beyond booking: whether any capability should require
-   `EMAIL_VERIFIED`, and what `ACCEPT_JOB` (M4) and `REQUEST_PAYOUT` (M5) demand.
-   Each is a row in the same table.
+   Still open beyond that: whether any capability should require `EMAIL_VERIFIED`,
+   and what `ACCEPT_JOB` (M4) and `REQUEST_PAYOUT` (M5) demand. Each is a row in
+   the same table.
 
 1. **Local infrastructure.** Docker Compose is the chosen approach and the file is in
    the repository, but Docker Desktop must be installed on each development machine.

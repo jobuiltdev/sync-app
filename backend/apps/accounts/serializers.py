@@ -133,3 +133,46 @@ class LogoutSerializer(serializers.Serializer):
 
 class RefreshRequestSerializer(serializers.Serializer):
     refresh = serializers.CharField(write_only=True)
+
+
+class PhoneUpdateSerializer(serializers.Serializer):
+    phone = serializers.CharField(max_length=20)
+
+    def validate_phone(self, value: str) -> str:
+        try:
+            phone = normalize_phone(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages) from exc
+
+        user = self.context["request"].user
+        if User.objects.filter(phone=phone).exclude(pk=user.pk).exists():
+            raise serializers.ValidationError("Another account already uses this phone number.")
+
+        return phone
+
+
+class VerificationStatusSerializer(serializers.Serializer):
+    """What the app needs to render the verification state of an account."""
+
+    phone = serializers.CharField(allow_null=True)
+    is_phone_verified = serializers.BooleanField()
+    phone_verified_at = serializers.DateTimeField(allow_null=True)
+
+
+class VerificationChallengeSerializer(serializers.Serializer):
+    """The safe half of a challenge.
+
+    Deliberately excludes the code and its hash. The client needs the id to submit
+    against and the timings to render a countdown, and nothing else.
+    """
+
+    challenge_id = serializers.UUIDField(source="id")
+    destination = serializers.CharField()
+    expires_at = serializers.DateTimeField()
+    attempts_remaining = serializers.IntegerField()
+    resend_available_in_seconds = serializers.IntegerField()
+
+
+class PhoneVerificationConfirmSerializer(serializers.Serializer):
+    challenge_id = serializers.UUIDField()
+    code = serializers.CharField(min_length=4, max_length=10, trim_whitespace=True)

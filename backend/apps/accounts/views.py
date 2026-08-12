@@ -1,27 +1,35 @@
 from typing import Any
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.settings import api_settings as jwt_settings
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.accounts import verification
 from apps.accounts.errors import InvalidToken
 from apps.accounts.models import User
 from apps.accounts.serializers import (
     AuthenticatedUserSerializer,
     LoginSerializer,
     LogoutSerializer,
+    PhoneUpdateSerializer,
+    PhoneVerificationConfirmSerializer,
     RefreshRequestSerializer,
     RegistrationSerializer,
     TokenPairSerializer,
     UserSerializer,
+    VerificationChallengeSerializer,
 )
+from apps.common.permissions import authenticated_user
 
 
 def issue_tokens(user: User) -> dict[str, str]:
@@ -177,3 +185,112 @@ class MeView(APIView):
     )
     def get(self, request: Request) -> Response:
         return Response(UserSerializer(request.user).data, status=status.HTTP_200_OK)
+
+
+class PhoneVerificationRequestThrottle(ScopedRateThrottle):
+    scope = "phone_verification_request"
+
+
+class PhoneVerificationConfirmThrottle(ScopedRateThrottle):
+    scope = "phone_verification_confirm"
+
+
+def _challenge_payload(challenge) -> dict[str, Any]:
+    cooldown = settings.PHONE_VERIFICATION["RESEND_COOLDOWN_SECONDS"]
+    elapsed = (timezone.now() - challenge.last_sent_at).total_seconds()
+
+    return {
+        "challenge_id": challenge.id,
+        "destination": challenge.destination,
+        "expires_at": challenge.expires_at,
+        "attempts_remaining": challenge.attempts_remaining,
+        "resend_available_in_seconds": max(int(cooldown - elapsed), 0),
+    }
+
+
+class PhoneUpdateView(APIView):
+    """Sets or changes the account's phone number.
+
+    Changing it clears any existing verification, so a number that was never
+    proven cannot inherit the previous one's status.
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = PhoneUpdateSerializer
+    http_method_names = ["put", "head", "options"]
+
+    @extend_schema(
+        operation_id="auth_phone_update",
+        summary="Set or change your phone number",
+        request=PhoneUpdateSerializer,
+        responses={status.HTTP_200_OK: UserSerializer},
+    )
+    def put(self, request: Request) -> Response:
+        serializer = PhoneUpdateSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+
+        user = verification.set_phone(
+            authenticated_user(request), serializer.validated_data["phone"]
+        )
+
+        return Response(UserSerializer(user).data, status=status.HTTP_200_OK)
+
+
+class PhoneVerificationRequestView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [PhoneVerificationRequestThrottle]
+    serializer_class = VerificationChallengeSerializer
+
+    @extend_schema(
+        operation_id="auth_phone_verification_request",
+        summary="Send a verification code by SMS",
+        description=(
+            "Issues a one-time code and sends it to the account's phone number. The "
+            "code is never returned by the API. Repeated requests are refused during "
+            "the resend cooldown."
+        ),
+        request=None,
+        responses={
+            status.HTTP_201_CREATED: VerificationChallengeSerializer,
+            status.HTTP_409_CONFLICT: None,
+            status.HTTP_429_TOO_MANY_REQUESTS: None,
+        },
+    )
+    def post(self, request: Request) -> Response:
+        result = verification.request_phone_verification(
+            authenticated_user(request), request_ip=request.META.get("REMOTE_ADDR")
+        )
+
+        return Response(_challenge_payload(result.challenge), status=status.HTTP_201_CREATED)
+
+
+class PhoneVerificationConfirmView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [PhoneVerificationConfirmThrottle]
+    serializer_class = PhoneVerificationConfirmSerializer
+
+    @extend_schema(
+        operation_id="auth_phone_verification_confirm",
+        summary="Submit a verification code",
+        description=(
+            "Consumes the challenge and marks the phone verified. A challenge is "
+            "single use: a second submission of the same code is refused."
+        ),
+        request=PhoneVerificationConfirmSerializer,
+        responses={
+            status.HTTP_200_OK: UserSerializer,
+            status.HTTP_400_BAD_REQUEST: None,
+            status.HTTP_410_GONE: None,
+        },
+    )
+    def post(self, request: Request) -> Response:
+        serializer = PhoneVerificationConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = verification.confirm_phone_verification(
+            authenticated_user(request),
+            serializer.validated_data["challenge_id"],
+            serializer.validated_data["code"],
+        )
+
+        return Response(UserSerializer(user).data, status=status.HTTP_200_OK)

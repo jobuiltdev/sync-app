@@ -131,6 +131,13 @@ REST_FRAMEWORK = {
     # entirely with pagination_class = None.
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 20,
+    # Verification hashes a code with Argon2 on every attempt, which is deliberate
+    # CPU cost. These bound how much of it an unauthenticated flood can provoke;
+    # the per-challenge attempt cap and resend cooldown do the rest.
+    "DEFAULT_THROTTLE_RATES": {
+        "phone_verification_request": "10/hour",
+        "phone_verification_confirm": "20/hour",
+    },
 }
 
 SIMPLE_JWT = {
@@ -160,6 +167,20 @@ SPECTACULAR_SETTINGS = {
     "ENUM_NAME_OVERRIDES": {
         "BookingStatus": "apps.bookings.state.BookingStatus",
     },
+}
+
+# Phone verification timings and limits, in one place. The console provider is
+# the development default and prints the code instead of sending it; production
+# must set SMS_BACKEND to a real provider.
+SMS_BACKEND = env("SMS_BACKEND", default="apps.accounts.sms.console.ConsoleSMSProvider")
+
+PHONE_VERIFICATION = {
+    "CODE_LENGTH": 6,
+    "TTL_SECONDS": 600,
+    "MAX_ATTEMPTS": 5,
+    "RESEND_COOLDOWN_SECONDS": 60,
+    "MAX_SENDS_PER_WINDOW": 5,
+    "SEND_WINDOW_SECONDS": 3600,
 }
 
 CORS_ALLOWED_ORIGINS: list[str] = env.list("DJANGO_CORS_ALLOWED_ORIGINS", default=[])

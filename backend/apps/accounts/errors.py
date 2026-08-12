@@ -56,6 +56,62 @@ _SPECIFIC_CODES = {
 }
 
 
+class PhoneNotSet(APIError):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_code = "PHONE_NOT_SET"
+    default_detail = "Add a phone number to your account first."
+
+
+class PhoneAlreadyVerified(APIError):
+    status_code = status.HTTP_409_CONFLICT
+    default_code = "PHONE_ALREADY_VERIFIED"
+    default_detail = "This phone number is already verified."
+
+
+class VerificationCooldown(APIError):
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    default_code = "PHONE_VERIFICATION_COOLDOWN"
+    default_detail = "A code was sent recently. Wait a moment before asking for another."
+
+    def __init__(self, retry_after: int) -> None:
+        super().__init__(details={"retry_after_seconds": retry_after})
+
+
+class VerificationChallengeNotFound(APIError):
+    """No usable challenge.
+
+    Deliberately one code for several situations: unknown id, another account's
+    challenge, already consumed, superseded, or bound to a number the account no
+    longer has. Distinguishing them would tell an attacker which challenge ids
+    exist and which accounts they belong to.
+    """
+
+    status_code = status.HTTP_404_NOT_FOUND
+    default_code = "VERIFICATION_CHALLENGE_NOT_FOUND"
+    default_detail = "That code request is no longer valid. Request a new code."
+
+
+class VerificationExpired(APIError):
+    status_code = status.HTTP_410_GONE
+    default_code = "PHONE_VERIFICATION_EXPIRED"
+    default_detail = "That code has expired. Request a new one."
+
+
+class VerificationExhausted(APIError):
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    default_code = "PHONE_VERIFICATION_EXHAUSTED"
+    default_detail = "Too many incorrect attempts. Request a new code."
+
+
+class InvalidVerificationCode(APIError):
+    status_code = status.HTTP_400_BAD_REQUEST
+    default_code = "INVALID_PHONE_VERIFICATION_CODE"
+    default_detail = "That code is not correct."
+
+    def __init__(self, attempts_remaining: int) -> None:
+        super().__init__(details={"attempts_remaining": attempts_remaining})
+
+
 def verification_required(result: PolicyResult) -> VerificationRequired:
     code, message = VerificationRequired.default_code, VerificationRequired.default_detail
 
