@@ -91,3 +91,14 @@ export function confirmPhoneVerification(
     code,
   });
 }
+
+export function requestEmailVerification(): Promise<VerificationChallenge> {
+  return api.post<VerificationChallenge>('/api/v1/auth/email/verification/request/', {});
+}
+
+export function confirmEmailVerification(challengeId: string, code: string): Promise<AuthUser> {
+  return api.post<AuthUser>('/api/v1/auth/email/verification/confirm/', {
+    challenge_id: challengeId,
+    code,
+  });
+}

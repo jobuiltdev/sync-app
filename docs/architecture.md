@@ -96,14 +96,17 @@ COMPLETED -> DISPUTED
 
 `EN_ROUTE` is optional and declared per service by its spec.
 
-### Booking, as implemented in M3
+### Booking, as implemented
 
-The lifecycle above is the full canonical set. M3 implements the subset a booking
-reaches without quoting, payment or matching:
+The lifecycle above is the full canonical set. The implemented subset is
+everything a booking reaches without quoting or payment:
 
 ```
-ASSIGNED -> [EN_ROUTE] -> IN_PROGRESS -> AWAITING_CONFIRMATION -> COMPLETED
-ASSIGNED, EN_ROUTE -> CANCELLED
+MATCHING -> ASSIGNED -> [EN_ROUTE] -> IN_PROGRESS
+         -> AWAITING_CONFIRMATION -> COMPLETED
+
+MATCHING -> EXPIRED      every offer declined or lapsed
+MATCHING, ASSIGNED, EN_ROUTE -> CANCELLED
 ```
 
 `EN_ROUTE` is optional because `ASSIGNED` reaches `IN_PROGRESS` directly, so a
@@ -116,9 +119,9 @@ table, and `services.transition()` is the only way a status changes: the API nev
 accepts a status from a client, every move is a named action endpoint, and an
 illegal one returns `ILLEGAL_TRANSITION` with the booking untouched.
 
-**A booking starts ASSIGNED** because the customer picks the provider directly.
-When M4 adds offers and provider acceptance, `MATCHING` is inserted before it and
-the table gains rows; nothing else changes.
+**A booking starts MATCHING.** It is a request until a provider takes it, and the
+only route to `ASSIGNED` is an accepted offer, which the offer domain drives as
+`SYSTEM`. No human actor can move a booking into `ASSIGNED` directly.
 
 **The address is copied, not referenced.** A booking records where a job was
 requested. An `Address` is a mutable row a customer edits or deletes freely, so
@@ -144,10 +147,71 @@ a record of something that happened between two people and must outlive a profil
 tidy-up, so an account with bookings is deactivated rather than deleted.
 
 Deferred from the booking domain, with the milestone that owns each: quotes and
-pricing (M5), offers, matching and provider acceptance (M4), availability (M4), the
-`Cancellation` model with fees (M5), `DISPUTED` (M7), and `DRAFT` / `QUOTED` /
-`PENDING_PAYMENT` / `MATCHING` / `EXPIRED`, which are defined above but have no
-meaning until the milestones that produce them exist.
+pricing (M5), availability windows (later), the `Cancellation` model with fees
+(M5), `DISPUTED` (M7), and `DRAFT` / `QUOTED` / `PENDING_PAYMENT`, which are
+defined above but have no meaning until the milestones that produce them exist.
+
+### Offers and acceptance, as implemented in M4
+
+A booking opens in `MATCHING` and reaches `ASSIGNED` only through an accepted
+offer. A request is not work until somebody has taken it.
+
+**Dispatch has no ranking.** Eligibility is a filter over facts already recorded
+in M2: the provider offers the service and that offering is active, their
+verification status is `APPROVED`, their own `is_accepting_jobs` switch is on, and
+they cover the booking's state. Every eligible provider is offered the job at the
+same moment and the first to accept wins. A scoring or pool-widening strategy is a
+later decision, and inventing one now would bury a business rule nobody agreed on.
+
+**Naming a provider is still supported**, which is the hybrid matching decision in
+section 1. A named provider gets a single `DIRECT` offer and is held to exactly the
+same eligibility bar: being asked for by name is not a way past approval.
+
+**Offer lifecycle**, an explicit status like every other lifecycle here:
+
+```
+PENDING -> ACCEPTED     this provider took it
+        -> DECLINED     this provider turned it down
+        -> EXPIRED      the window closed unanswered
+        -> SUPERSEDED   somebody else took the booking first
+```
+
+Every terminal state is terminal. `SUPERSEDED` is deliberately distinct from
+`DECLINED`: the provider did nothing wrong and their acceptance rate should not
+record a refusal for a job somebody else was quicker on.
+
+**The concurrency invariant is enforced by the database, not by application
+checks.** A partial unique index permits at most one `ACCEPTED` offer per booking,
+so even if two transactions both passed an application-level test only one can
+commit. On top of that, acceptance locks the booking row with `select_for_update`,
+which makes the race deterministic rather than merely safe: the loser waits, sees
+the booking is no longer `MATCHING`, and is told the job is gone. Verified against
+a real database with two concurrent threads: one winner, one accepted offer, one
+`ASSIGNED` event, no offers left pending.
+
+**A provider is never told who beat them.** Losing an offer returns
+`BOOKING_NO_LONGER_AVAILABLE` with no detail, because which competitor took a job
+is not information a provider is owed.
+
+**When every offer is declined the booking becomes `EXPIRED`**, which is what the
+lifecycle above already defines for a request no provider took. Declining touches
+only that provider's own offer and never the customer's booking directly.
+
+**Accepting requires more than booking does.** `ACCEPT_JOB` needs both
+`PHONE_VERIFIED` and `EMAIL_VERIFIED`, against `CREATE_BOOKING`'s phone alone. A
+provider is going into somebody's home, so both contact channels are proven: the
+phone so the customer can reach them on the day, the email as a second and harder
+to churn identifier for the account behind the work. Declining requires neither,
+since turning work down is not entering anyone's home.
+
+Note that eligibility reads the **provider profile**, not the user's contact
+verification. An unverified provider can still receive offers and will be told to
+verify when they try to accept, which is a prompt rather than a dead end. It does
+mean a booking can be held open by someone who cannot yet accept, which the offer
+expiry bounds.
+
+Deferred: offer waves and pool widening, ranking, availability windows, and any
+automatic re-dispatch after a decline.
 
 ### How verticals stay modular
 
@@ -782,16 +846,16 @@ fix it. That is the point of doing M3 on a single vertical.
 
 ### Open
 
-0. **A production SMS provider.** The verification flow is built and works end to
-   end, but no real provider is configured: `SMS_BACKEND` defaults to the console
-   provider, which prints the code rather than sending it. A customer on a real
-   device cannot receive a code until a provider is chosen, credentialed and set.
-   Termii is the documented intention. This is the last thing standing between the
-   current build and a customer completing a booking unaided.
+0. **Production SMS and email providers.** Both verification flows are built and
+   work end to end, but neither has a real provider configured: `SMS_BACKEND`
+   defaults to the console provider and `EMAIL_BACKEND` to Django's console
+   backend, so both print rather than send. Nobody on a real device can receive a
+   code until providers are chosen, credentialed and set. Termii is the documented
+   intention for SMS. This is the last thing standing between the current build
+   and a customer booking, or a provider accepting, unaided.
 
-   Still open beyond that: whether any capability should require `EMAIL_VERIFIED`,
-   and what `ACCEPT_JOB` (M4) and `REQUEST_PAYOUT` (M5) demand. Each is a row in
-   the same table.
+   `ACCEPT_JOB` is now settled at `PHONE_VERIFIED` plus `EMAIL_VERIFIED`.
+   `REQUEST_PAYOUT` (M5) is still an empty row in the same table.
 
 1. **Local infrastructure.** Docker Compose is the chosen approach and the file is in
    the repository, but Docker Desktop must be installed on each development machine.

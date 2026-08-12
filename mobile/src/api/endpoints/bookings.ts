@@ -40,7 +40,8 @@ export interface BookingSummary {
   status: BookingStatus;
   service_slug: string;
   service_name: string;
-  provider_name: string;
+  /** Null while the booking is still MATCHING and nobody has taken it. */
+  provider_name: string | null;
   address_summary: string;
   scheduled_for: string | null;
   created_at: string;

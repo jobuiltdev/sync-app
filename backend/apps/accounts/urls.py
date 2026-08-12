@@ -1,6 +1,8 @@
 from django.urls import path
 
 from apps.accounts.views import (
+    EmailVerificationConfirmView,
+    EmailVerificationRequestView,
     LoginView,
     LogoutView,
     MeView,
@@ -20,6 +22,16 @@ urlpatterns = [
     path("logout/", LogoutView.as_view(), name="logout"),
     path("me/", MeView.as_view(), name="me"),
     path("phone/", PhoneUpdateView.as_view(), name="phone"),
+    path(
+        "email/verification/request/",
+        EmailVerificationRequestView.as_view(),
+        name="email-verification-request",
+    ),
+    path(
+        "email/verification/confirm/",
+        EmailVerificationConfirmView.as_view(),
+        name="email-verification-confirm",
+    ),
     path(
         "phone/verification/request/",
         PhoneVerificationRequestView.as_view(),

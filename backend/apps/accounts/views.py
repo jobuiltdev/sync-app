@@ -187,6 +187,14 @@ class MeView(APIView):
         return Response(UserSerializer(request.user).data, status=status.HTTP_200_OK)
 
 
+class EmailVerificationRequestThrottle(ScopedRateThrottle):
+    scope = "email_verification_request"
+
+
+class EmailVerificationConfirmThrottle(ScopedRateThrottle):
+    scope = "email_verification_confirm"
+
+
 class PhoneVerificationRequestThrottle(ScopedRateThrottle):
     scope = "phone_verification_request"
 
@@ -195,8 +203,8 @@ class PhoneVerificationConfirmThrottle(ScopedRateThrottle):
     scope = "phone_verification_confirm"
 
 
-def _challenge_payload(challenge) -> dict[str, Any]:
-    cooldown = settings.PHONE_VERIFICATION["RESEND_COOLDOWN_SECONDS"]
+def _challenge_payload(challenge, limits: dict | None = None) -> dict[str, Any]:
+    cooldown = (limits or settings.PHONE_VERIFICATION)["RESEND_COOLDOWN_SECONDS"]
     elapsed = (timezone.now() - challenge.last_sent_at).total_seconds()
 
     return {
@@ -288,6 +296,64 @@ class PhoneVerificationConfirmView(APIView):
         serializer.is_valid(raise_exception=True)
 
         user = verification.confirm_phone_verification(
+            authenticated_user(request),
+            serializer.validated_data["challenge_id"],
+            serializer.validated_data["code"],
+        )
+
+        return Response(UserSerializer(user).data, status=status.HTTP_200_OK)
+
+
+class EmailVerificationRequestView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [EmailVerificationRequestThrottle]
+    serializer_class = VerificationChallengeSerializer
+
+    @extend_schema(
+        operation_id="auth_email_verification_request",
+        summary="Send a verification code by email",
+        description=(
+            "Issues a one-time code and emails it to the account's address. The code "
+            "is never returned by the API."
+        ),
+        request=None,
+        responses={
+            status.HTTP_201_CREATED: VerificationChallengeSerializer,
+            status.HTTP_409_CONFLICT: None,
+            status.HTTP_429_TOO_MANY_REQUESTS: None,
+        },
+    )
+    def post(self, request: Request) -> Response:
+        result = verification.request_email_verification(
+            authenticated_user(request), request_ip=request.META.get("REMOTE_ADDR")
+        )
+
+        return Response(
+            _challenge_payload(result.challenge, verification.EMAIL.config()),
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class EmailVerificationConfirmView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [EmailVerificationConfirmThrottle]
+    serializer_class = PhoneVerificationConfirmSerializer
+
+    @extend_schema(
+        operation_id="auth_email_verification_confirm",
+        summary="Submit an emailed verification code",
+        request=PhoneVerificationConfirmSerializer,
+        responses={
+            status.HTTP_200_OK: UserSerializer,
+            status.HTTP_400_BAD_REQUEST: None,
+            status.HTTP_410_GONE: None,
+        },
+    )
+    def post(self, request: Request) -> Response:
+        serializer = PhoneVerificationConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = verification.confirm_email_verification(
             authenticated_user(request),
             serializer.validated_data["challenge_id"],
             serializer.validated_data["code"],

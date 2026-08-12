@@ -40,7 +40,9 @@ class BookingAddressSerializer(serializers.Serializer):
 class BookingSummarySerializer(serializers.ModelSerializer):
     service_slug = serializers.SlugField(source="service.slug", read_only=True)
     service_name = serializers.CharField(source="service.name", read_only=True)
-    provider_name = serializers.CharField(source="provider.display_name", read_only=True)
+    provider_name = serializers.CharField(
+        source="provider.display_name", read_only=True, allow_null=True, default=None
+    )
     address_summary = serializers.CharField(read_only=True)
 
     class Meta:
@@ -62,7 +64,9 @@ class BookingSummarySerializer(serializers.ModelSerializer):
 class BookingDetailSerializer(serializers.ModelSerializer):
     service_slug = serializers.SlugField(source="service.slug", read_only=True)
     service_name = serializers.CharField(source="service.name", read_only=True)
-    provider_name = serializers.CharField(source="provider.display_name", read_only=True)
+    provider_name = serializers.CharField(
+        source="provider.display_name", read_only=True, allow_null=True, default=None
+    )
     customer_name = serializers.CharField(source="customer.full_name", read_only=True)
     address = serializers.SerializerMethodField()
     events = BookingStatusEventSerializer(many=True, read_only=True)
@@ -119,8 +123,14 @@ class BookingCreateSerializer(serializers.Serializer):
     service_slug = serializers.SlugRelatedField(
         slug_field="slug", queryset=Service.objects.filter(is_active=True)
     )
+    #: Optional. Naming a provider sends them a direct offer; omitting it offers
+    #: the job to every eligible provider at once, which is the settled hybrid
+    #: matching decision.
     provider_id = serializers.PrimaryKeyRelatedField(
-        queryset=ProviderProfile.objects.all(), pk_field=serializers.UUIDField()
+        queryset=ProviderProfile.objects.all(),
+        pk_field=serializers.UUIDField(),
+        required=False,
+        allow_null=True,
     )
     address_id = serializers.PrimaryKeyRelatedField(
         queryset=Address.objects.none(), pk_field=serializers.UUIDField()

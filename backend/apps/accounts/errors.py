@@ -68,13 +68,45 @@ class PhoneAlreadyVerified(APIError):
     default_detail = "This phone number is already verified."
 
 
+class EmailAlreadyVerified(APIError):
+    status_code = status.HTTP_409_CONFLICT
+    default_code = "EMAIL_ALREADY_VERIFIED"
+    default_detail = "This email address is already verified."
+
+
+#: Phone and email share one code path, but a client branching on
+#: PHONE_VERIFICATION_EXPIRED for an email challenge would be wrong. The channel
+#: selects the code; PHONE is the default so the M1 contract is unchanged.
+_CHANNEL_CODES = {
+    "PHONE": {
+        "COOLDOWN": "PHONE_VERIFICATION_COOLDOWN",
+        "EXPIRED": "PHONE_VERIFICATION_EXPIRED",
+        "EXHAUSTED": "PHONE_VERIFICATION_EXHAUSTED",
+        "INVALID": "INVALID_PHONE_VERIFICATION_CODE",
+    },
+    "EMAIL": {
+        "COOLDOWN": "EMAIL_VERIFICATION_COOLDOWN",
+        "EXPIRED": "EMAIL_VERIFICATION_EXPIRED",
+        "EXHAUSTED": "EMAIL_VERIFICATION_EXHAUSTED",
+        "INVALID": "INVALID_EMAIL_VERIFICATION_CODE",
+    },
+}
+
+
+def channel_code(channel: str, kind: str) -> str:
+    return _CHANNEL_CODES.get(channel, _CHANNEL_CODES["PHONE"])[kind]
+
+
 class VerificationCooldown(APIError):
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
     default_code = "PHONE_VERIFICATION_COOLDOWN"
     default_detail = "A code was sent recently. Wait a moment before asking for another."
 
-    def __init__(self, retry_after: int) -> None:
-        super().__init__(details={"retry_after_seconds": retry_after})
+    def __init__(self, retry_after: int, channel: str = "PHONE") -> None:
+        super().__init__(
+            code=channel_code(channel, "COOLDOWN"),
+            details={"retry_after_seconds": retry_after},
+        )
 
 
 class VerificationChallengeNotFound(APIError):
@@ -96,11 +128,17 @@ class VerificationExpired(APIError):
     default_code = "PHONE_VERIFICATION_EXPIRED"
     default_detail = "That code has expired. Request a new one."
 
+    def __init__(self, channel: str = "PHONE") -> None:
+        super().__init__(code=channel_code(channel, "EXPIRED"))
+
 
 class VerificationExhausted(APIError):
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
     default_code = "PHONE_VERIFICATION_EXHAUSTED"
     default_detail = "Too many incorrect attempts. Request a new code."
+
+    def __init__(self, channel: str = "PHONE") -> None:
+        super().__init__(code=channel_code(channel, "EXHAUSTED"))
 
 
 class InvalidVerificationCode(APIError):
@@ -108,8 +146,11 @@ class InvalidVerificationCode(APIError):
     default_code = "INVALID_PHONE_VERIFICATION_CODE"
     default_detail = "That code is not correct."
 
-    def __init__(self, attempts_remaining: int) -> None:
-        super().__init__(details={"attempts_remaining": attempts_remaining})
+    def __init__(self, attempts_remaining: int, channel: str = "PHONE") -> None:
+        super().__init__(
+            code=channel_code(channel, "INVALID"),
+            details={"attempts_remaining": attempts_remaining},
+        )
 
 
 def verification_required(result: PolicyResult) -> VerificationRequired:

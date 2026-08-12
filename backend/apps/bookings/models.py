@@ -4,6 +4,7 @@ from django.conf import settings
 from django.db import models
 
 from apps.accounts.address import Address
+from apps.bookings.offers import Offer, OfferKind, OfferStatus
 from apps.bookings.state import ActorType, BookingStatus
 from apps.catalog.models import Service
 from apps.common.models import BaseModel
@@ -12,6 +13,16 @@ from apps.providers.models import ProviderProfile
 
 #: Excludes characters people confuse when reading a reference aloud to support:
 #: no O versus 0, no I versus 1.
+__all__ = [
+    "Booking",
+    "BookingStatusEvent",
+    "Offer",
+    "OfferKind",
+    "OfferStatus",
+    "generate_reference",
+]
+
+#: Excludes characters people confuse when reading a reference aloud to support.
 REFERENCE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 REFERENCE_LENGTH = 6
 
@@ -54,16 +65,15 @@ class Booking(BaseModel):
         ProviderProfile,
         on_delete=models.PROTECT,
         related_name="bookings",
-        # Nullable so that M4's automatic matching can create a booking before a
-        # provider exists for it. The M3 API requires one, because the customer
-        # chooses directly.
+        # Null until a provider accepts an offer. A booking in MATCHING has been
+        # asked for but not yet taken, so there is genuinely nobody to point at.
         null=True,
         blank=True,
     )
     service = models.ForeignKey(Service, on_delete=models.PROTECT, related_name="bookings")
 
     status = models.CharField(
-        max_length=24, choices=BookingStatus.choices, default=BookingStatus.ASSIGNED
+        max_length=24, choices=BookingStatus.choices, default=BookingStatus.MATCHING
     )
 
     spec_key = models.CharField(max_length=60, editable=False)

@@ -174,7 +174,9 @@ class BookingStatusEventTests(TestCase):
 
         event = booking.events.get()
         self.assertEqual(event.from_status, "")
-        self.assertEqual(event.to_status, BookingStatus.ASSIGNED)
+        # A booking opens as a request, not as work. ASSIGNED arrives only when a
+        # provider accepts.
+        self.assertEqual(event.to_status, BookingStatus.MATCHING)
         self.assertEqual(event.actor_id, data["customer"].id)
 
     def test_events_are_ordered_oldest_first(self):

@@ -8,6 +8,7 @@ from apps.bookings.state import BookingStatus
 from apps.bookings.tests.factories import (
     PASSWORD,
     VALID_CLEANING_DETAILS,
+    accept_first_offer,
     full_setup,
     make_address,
     make_customer,
@@ -46,7 +47,8 @@ class BookingCreationPolicyTests(APITestCase):
         response = self.client.post(URL, payload(self.data), format="json")
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(response.data["status"], BookingStatus.ASSIGNED)
+        # The request is out to providers; nobody has taken it yet.
+        self.assertEqual(response.data["status"], BookingStatus.MATCHING)
 
     def test_an_unverified_phone_cannot_book(self):
         self.data["customer"].phone_verified_at = None
@@ -234,6 +236,9 @@ class BookingAccessTests(APITestCase):
         self.data = full_setup()
         self.client.force_authenticate(self.data["customer"])
         self.booking_id = self.client.post(URL, payload(self.data), format="json").data["id"]
+        # These assertions are about the assigned lifecycle, so take the offer
+        # through the real path first.
+        accept_first_offer(Booking.objects.get(id=self.booking_id), self.data["provider"])
 
         self.stranger = make_customer("chidi@example.com")
 
@@ -269,8 +274,11 @@ class BookingAccessTests(APITestCase):
     def test_the_detail_carries_the_history(self):
         response = self.client.get(f"{URL}{self.booking_id}/")
 
-        self.assertEqual(len(response.data["events"]), 1)
-        self.assertEqual(response.data["events"][0]["to_status"], BookingStatus.ASSIGNED)
+        # Created into MATCHING, then assigned when the provider accepted.
+        self.assertEqual(
+            [event["to_status"] for event in response.data["events"]],
+            [BookingStatus.MATCHING, BookingStatus.ASSIGNED],
+        )
 
     def test_the_detail_advertises_what_can_happen_next(self):
         response = self.client.get(f"{URL}{self.booking_id}/")
@@ -306,6 +314,7 @@ class BookingActionTests(APITestCase):
         self.data = full_setup()
         self.client.force_authenticate(self.data["customer"])
         self.booking_id = self.client.post(URL, payload(self.data), format="json").data["id"]
+        accept_first_offer(Booking.objects.get(id=self.booking_id), self.data["provider"])
         self.provider_user = self.data["provider"].user
 
     def as_provider(self):

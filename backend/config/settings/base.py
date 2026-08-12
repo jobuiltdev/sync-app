@@ -137,6 +137,8 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "phone_verification_request": "10/hour",
         "phone_verification_confirm": "20/hour",
+        "email_verification_request": "10/hour",
+        "email_verification_confirm": "20/hour",
     },
 }
 
@@ -166,6 +168,8 @@ SPECTACULAR_SETTINGS = {
     # emitting a differently named enum component per field.
     "ENUM_NAME_OVERRIDES": {
         "BookingStatus": "apps.bookings.state.BookingStatus",
+        "OfferStatus": "apps.bookings.offers.OfferStatus",
+        "OfferKind": "apps.bookings.offers.OfferKind",
     },
 }
 
@@ -181,6 +185,30 @@ PHONE_VERIFICATION = {
     "RESEND_COOLDOWN_SECONDS": 60,
     "MAX_SENDS_PER_WINDOW": 5,
     "SEND_WINDOW_SECONDS": 3600,
+}
+
+# Email codes live longer than SMS ones. Mail queues, gets filtered and gets read
+# later, so a ten minute window would expire on people through no fault of theirs.
+EMAIL_VERIFICATION = {
+    "CODE_LENGTH": 6,
+    "TTL_SECONDS": 1800,
+    "MAX_ATTEMPTS": 5,
+    "RESEND_COOLDOWN_SECONDS": 60,
+    "MAX_SENDS_PER_WINDOW": 5,
+    "SEND_WINDOW_SECONDS": 3600,
+}
+
+# Django's own email framework is the abstraction; the backend setting selects the
+# implementation. The default prints to the console and sends nothing. No real
+# mail provider is configured.
+EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Sync <no-reply@sync.ng>")
+
+# How long a provider has to answer an offer. Long enough that somebody working
+# does not lose a job by not looking at their phone, short enough that a customer
+# is not left waiting on a provider who has stopped reading.
+BOOKING_OFFERS = {
+    "TTL_SECONDS": 900,
 }
 
 CORS_ALLOWED_ORIGINS: list[str] = env.list("DJANGO_CORS_ALLOWED_ORIGINS", default=[])

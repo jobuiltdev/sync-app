@@ -15,7 +15,9 @@ import { Field } from '@/components/ui/Field';
 import { useCurrentUser } from '@/features/auth/hooks';
 import { needsNewCode, toVerificationState } from '@/features/auth/phone-verification';
 import {
+  useConfirmEmailVerification,
   useConfirmPhoneVerification,
+  useRequestEmailVerification,
   useRequestPhoneVerification,
   useUpdatePhone,
 } from '@/features/auth/verification-hooks';
@@ -36,8 +38,12 @@ export default function VerifyPhoneScreen() {
   const requestCode = useRequestPhoneVerification();
   const confirmCode = useConfirmPhoneVerification();
 
+  const requestEmail = useRequestEmailVerification();
+  const confirmEmail = useConfirmEmailVerification();
+
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
+  const [emailCode, setEmailCode] = useState('');
   const [now, setNow] = useState(() => Date.now());
   const [resendAt, setResendAt] = useState(0);
 
@@ -47,7 +53,12 @@ export default function VerifyPhoneScreen() {
     toVerificationState(requestCode.error) ??
     toVerificationState(updatePhone.error);
 
+  const emailState =
+    toVerificationState(confirmEmail.error) ?? toVerificationState(requestEmail.error);
+
   const verified = user?.is_phone_verified ?? false;
+  const emailVerified = user?.is_email_verified ?? false;
+  const emailChallenge = requestEmail.data ?? null;
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -71,13 +82,13 @@ export default function VerifyPhoneScreen() {
     });
   }
 
-  if (verified) {
+  if (verified && emailVerified) {
     return (
       <SafeAreaView style={styles.screen}>
         <View style={styles.content}>
-          <Text style={styles.title}>Phone verified</Text>
+          <Text style={styles.title}>You are verified</Text>
           <Text style={styles.body}>
-            {user?.phone} is confirmed. You can book a service now.
+            {user?.phone} and {user?.email} are confirmed.
           </Text>
           <Button label="Continue" onPress={() => router.replace('/home')} />
         </View>
@@ -186,6 +197,61 @@ export default function VerifyPhoneScreen() {
             </View>
           ) : null}
 
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Email</Text>
+            <View style={styles.row}>
+              <Text style={styles.muted}>{user?.email}</Text>
+              <Text style={styles.value}>{emailVerified ? 'Verified' : 'Not verified'}</Text>
+            </View>
+
+            {emailVerified ? null : emailChallenge ? (
+              <>
+                <Field
+                  label="Emailed code"
+                  value={emailCode}
+                  onChangeText={setEmailCode}
+                  keyboardType="number-pad"
+                  maxLength={6}
+                  placeholder="123456"
+                />
+                {emailState ? (
+                  <Text accessibilityRole="alert" style={styles.error}>
+                    {emailState.message}
+                  </Text>
+                ) : null}
+                <Button
+                  label="Verify email"
+                  loading={confirmEmail.isPending}
+                  disabled={emailCode.length < 4}
+                  onPress={() =>
+                    confirmEmail.mutate({
+                      challengeId: emailChallenge.challenge_id,
+                      code: emailCode,
+                    })
+                  }
+                />
+              </>
+            ) : (
+              <>
+                {emailState ? (
+                  <Text accessibilityRole="alert" style={styles.error}>
+                    {emailState.message}
+                  </Text>
+                ) : null}
+                <Button
+                  label="Email me a code"
+                  variant="secondary"
+                  loading={requestEmail.isPending}
+                  onPress={() => {
+                    setEmailCode('');
+                    confirmEmail.reset();
+                    requestEmail.mutate();
+                  }}
+                />
+              </>
+            )}
+          </View>
+
           <Button label="Back" variant="secondary" onPress={() => router.back()} />
         </ScrollView>
       </KeyboardAvoidingView>
@@ -218,4 +284,5 @@ const styles = StyleSheet.create({
   muted: { fontSize: fontSizes.footnote, color: colors.inkMuted },
   value: { fontSize: fontSizes.footnote, fontWeight: fontWeights.medium, color: colors.ink },
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md },
+  error: { fontSize: fontSizes.caption, color: colors.danger },
 });

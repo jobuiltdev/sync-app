@@ -10,7 +10,12 @@ from apps.bookings.models import Booking
 from apps.bookings.state import ActorType, BookingStatus
 from apps.catalog.models import Service
 from apps.catalog.tests.factories import make_service
-from apps.providers.models import ProviderProfile, ProviderService
+from apps.providers.models import (
+    ProviderProfile,
+    ProviderService,
+    ProviderServiceArea,
+    VerificationStatus,
+)
 
 PASSWORD = "Lagos-Rider-2026"
 
@@ -53,12 +58,40 @@ def make_address(user: User, **overrides) -> Address:
     return Address.objects.create(**{**defaults, **overrides})
 
 
-def make_provider_offering(service: Service, email: str | None = None) -> ProviderProfile:
+def make_provider_offering(
+    service: Service,
+    email: str | None = None,
+    *,
+    state: str = "LAGOS",
+    approved: bool = True,
+    accepting: bool = True,
+    verified: bool = True,
+) -> ProviderProfile:
+    """A provider who can actually be offered work.
+
+    Eligibility is approval plus their own switch plus covering the area, so a
+    fixture that skips any of those is not a bookable provider and would only
+    prove that the filter rejects it. The flags exist for the tests that want
+    exactly that.
+    """
+    user = User.objects.create_user(email=email or unique_email("provider"), password=PASSWORD)
+    if verified:
+        # ACCEPT_JOB needs both channels proven.
+        user.phone = f"+23480{next(_sequence):08d}"[:14]
+        user.phone_verified_at = timezone.now()
+        user.email_verified_at = timezone.now()
+        user.save()
+
     provider = ProviderProfile.objects.create(
-        user=User.objects.create_user(email=email or unique_email("provider"), password=PASSWORD),
+        user=user,
         display_name="Ada Cleaning Services",
+        verification_status=(
+            VerificationStatus.APPROVED if approved else VerificationStatus.PENDING
+        ),
+        is_accepting_jobs=accepting,
     )
     ProviderService.objects.create(provider=provider, service=service)
+    ProviderServiceArea.objects.create(provider=provider, state=state)
     return provider
 
 
@@ -99,3 +132,15 @@ def make_booking(*, status: str = BookingStatus.ASSIGNED, **overrides) -> Bookin
 
 
 ACTORS = ActorType
+
+
+def accept_first_offer(booking, provider: ProviderProfile):
+    """Walks a booking from MATCHING to ASSIGNED through the real offer path.
+
+    Lifecycle tests that begin at ASSIGNED use this rather than writing the status
+    directly, so they exercise the same route production takes.
+    """
+    from apps.bookings.dispatch import accept_offer
+
+    offer = booking.offers.get(provider=provider)
+    return accept_offer(offer.id, provider, provider.user)

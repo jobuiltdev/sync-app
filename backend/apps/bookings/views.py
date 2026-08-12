@@ -73,7 +73,7 @@ class CustomerBookingListCreateView(ListCreateAPIView):
         booking = services.create_booking(
             customer=authenticated_user(request),
             service=data["service_slug"],
-            provider=data["provider_id"],
+            provider=data.get("provider_id"),
             address=data["address_id"],
             details=data["details"],
             scheduled_for=data.get("scheduled_for"),

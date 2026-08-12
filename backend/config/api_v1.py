@@ -17,6 +17,7 @@ urlpatterns = [
     path("customer/bookings/", include("apps.bookings.customer_urls")),
     path("provider/", include("apps.providers.urls")),
     path("provider/bookings/", include("apps.bookings.provider_urls")),
+    path("provider/offers/", include("apps.bookings.offer_urls")),
     path("schema/", SpectacularAPIView.as_view(), name="schema"),
     path("docs/", SpectacularSwaggerView.as_view(url_name="v1:schema"), name="docs"),
 ]

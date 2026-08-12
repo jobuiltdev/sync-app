@@ -33,7 +33,7 @@ class IllegalTransition(APIError):
 
 class ProviderUnavailable(APIError):
     default_code = "PROVIDER_NOT_AVAILABLE"
-    default_detail = "That provider is not offering this service."
+    default_detail = "That provider is not available for this service in your area."
 
 
 def transition(
@@ -105,18 +105,23 @@ def create_booking(
     *,
     customer: User,
     service: Service,
-    provider: ProviderProfile,
     address: Address,
     details: dict,
+    provider: ProviderProfile | None = None,
     scheduled_for: Any = None,
 ) -> Booking:
     """Creates a booking, or nothing at all.
 
     The capability check runs first and outside any write, so a customer who has
     not verified their phone never causes a row to be written. Everything after it
-    is one transaction: booking, address snapshot and opening history row commit
-    together or not at all.
+    is one transaction: booking, address snapshot, opening history row and the
+    offers commit together or not at all.
+
+    A booking opens in MATCHING. It is a request until a provider takes it, and
+    the only route to ASSIGNED is an accepted offer.
     """
+    from apps.bookings.dispatch import dispatch_offers, is_eligible
+
     policy.enforce(customer, policy.Capability.CREATE_BOOKING)
 
     if address.user_id != customer.id:
@@ -124,17 +129,19 @@ def create_booking(
         # the requesting customer, so reaching here means a new caller was added.
         raise APIError("That address does not belong to you.", code="ADDRESS_NOT_FOUND")
 
-    if not provider.offered_services.filter(service=service, is_active=True).exists():
+    if provider is not None and not is_eligible(provider, service, address.state):
+        # A named provider is still held to the same bar as a matched one. An
+        # unapproved provider must not reach a customer's home by being asked for
+        # by name.
         raise ProviderUnavailable
 
     booking = Booking(
         customer=customer,
-        provider=provider,
         service=service,
         spec_key=service.spec_key,
         details=details,
         scheduled_for=scheduled_for,
-        status=BookingStatus.ASSIGNED,
+        status=BookingStatus.MATCHING,
     )
     booking.snapshot_address(address)
     booking.save()
@@ -142,10 +149,12 @@ def create_booking(
     BookingStatusEvent.objects.create(
         booking=booking,
         from_status="",
-        to_status=BookingStatus.ASSIGNED,
+        to_status=BookingStatus.MATCHING,
         actor_type=ActorType.CUSTOMER,
         actor_id=customer.id,
         reason="Booking created",
     )
+
+    dispatch_offers(booking, direct_provider=provider)
 
     return booking

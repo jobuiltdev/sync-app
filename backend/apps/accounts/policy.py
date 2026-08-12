@@ -22,6 +22,7 @@ class Capability(models.TextChoices):
     """A gated action. Named for what the user is doing, not for an endpoint."""
 
     CREATE_BOOKING = "CREATE_BOOKING", "Create a booking"
+    ACCEPT_JOB = "ACCEPT_JOB", "Accept a job offer"
 
 
 class Requirement(models.TextChoices):
@@ -33,8 +34,13 @@ class Requirement(models.TextChoices):
 #: provider on their way to an address needs to reach the customer by phone; an
 #: email address does nothing for that, and demanding both would cost conversion at
 #: the exact moment the customer is ready to commit.
+#: Accepting a job is held to a higher bar than booking one. A provider is going
+#: into someone's home, so both contact channels must be proven: the phone so the
+#: customer can reach them on the day, the email as a second, harder to churn
+#: identifier for the account behind the work.
 CAPABILITY_REQUIREMENTS: dict[str, list[str]] = {
     Capability.CREATE_BOOKING: [Requirement.PHONE_VERIFIED],
+    Capability.ACCEPT_JOB: [Requirement.PHONE_VERIFIED, Requirement.EMAIL_VERIFIED],
 }
 
 
