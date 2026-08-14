@@ -6,13 +6,23 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Cancel a superseded run rather than paying for both.
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
 defaults:
   run:
     working-directory: backend
 
+# Read-only. This workflow checks code; it publishes nothing and needs no more.
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     services:
       postgres:
@@ -29,6 +39,8 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      # Needed: the health check exercises the real cache backend, and the test
+      # settings point Django's cache at this.
       redis:
         image: redis:7-alpine
         ports:
@@ -68,8 +80,60 @@ jobs:
       - name: Type check
         run: mypy .
 
+      - name: Django checks
+        run: python manage.py check
+
+      # A model changed without a migration is a deployment that fails on the
+      # first request rather than in CI.
+      - name: Migrations are complete
+        run: python manage.py makemigrations --check --dry-run
+
       - name: Test
         run: pytest
 
+      # Both runners, deliberately. They load different settings paths and have
+      # twice caught a divergence that only one of them saw.
+      - name: Test with the Django runner
+        run: python manage.py test
+
       - name: Validate OpenAPI schema
-        run: python manage.py spectacular --file schema.yml --validate
+        run: python manage.py spectacular --file schema.yml --validate --fail-on-warn
+
+      # The production settings must import and pass their own checks against a
+      # complete environment. No real credentials: these values are structurally
+      # valid and functionally worthless, which is exactly what this proves.
+      - name: Production settings load and validate
+        env:
+          DJANGO_SECRET_KEY: ci-only-not-a-real-key-long-enough-to-pass-the-length-check-00
+          DJANGO_ALLOWED_HOSTS: api.example.invalid
+          DATABASE_SSLMODE: disable
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          PAYMENT_GATEWAY: apps.payments.gateways.paystack.PaystackGateway
+          BANK_RESOLVER: apps.payments.banks.paystack.PaystackBankResolver
+          PAYOUT_TRANSFER_PROVIDER: apps.payments.transfers.paystack.PaystackTransferProvider
+          SMS_BACKEND: apps.accounts.sms.termii.TermiiSMSProvider
+          EMAIL_BACKEND: apps.accounts.email.resend.ResendEmailBackend
+          PAYSTACK_SECRET_KEY: ci-placeholder
+          TERMII_API_KEY: ci-placeholder
+          RESEND_API_KEY: ci-placeholder
+        run: python manage.py check --deploy --settings=config.settings.prod
+
+      # Production must refuse a fake provider. Inverted on purpose: this step
+      # passes only when the check fails.
+      - name: Production refuses development stand-ins
+        env:
+          DJANGO_SECRET_KEY: ci-only-not-a-real-key-long-enough-to-pass-the-length-check-00
+          DJANGO_ALLOWED_HOSTS: api.example.invalid
+          DATABASE_SSLMODE: disable
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          PAYMENT_GATEWAY: apps.payments.gateways.fake.FakeGateway
+          BANK_RESOLVER: apps.payments.banks.fake.FakeBankResolver
+          PAYOUT_TRANSFER_PROVIDER: apps.payments.transfers.fake.FakeTransferProvider
+          SMS_BACKEND: apps.accounts.sms.console.ConsoleSMSProvider
+          EMAIL_BACKEND: django.core.mail.backends.console.EmailBackend
+        run: |
+          if python manage.py check --settings=config.settings.prod; then
+            echo "Production accepted a fake provider, which it must never do."
+            exit 1
+          fi
+          echo "Production correctly refused the fake providers."

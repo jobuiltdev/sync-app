@@ -743,6 +743,126 @@ bounded at two hundred rows, so a bad day cannot produce a task that holds locks
 for minutes, and whatever is left is picked up on the next tick. Several workers
 running the same schedule is safe and is tested.
 
+### Deployment and operations, as implemented in M7
+
+M6B made the system correct when nobody is watching. M7 makes it safe to hand to
+somebody who is not the person who wrote it.
+
+#### The shape of a deployment
+
+Three processes from one image, plus PostgreSQL and Redis.
+
+```
+gunicorn config.wsgi:application     the API, scaled to traffic
+celery -A config worker              the tasks, scaled independently
+celery -A config beat                exactly one, ever
+```
+
+One image because the three genuinely run the same code, and one dependency set
+is one thing to keep in step. Two stages in the build, so the runtime image
+carries no compiler, no ruff, no mypy and no pytest, runs as a non-root user, and
+owns nothing it could rewrite.
+
+`docker-compose.yml` keeps its original job of providing local PostgreSQL and
+Redis. The three application processes are behind an opt-in `app` profile, for
+checking the image works rather than for daily development, which still runs from
+the virtual environment because the edit-reload loop matters more there.
+
+Kubernetes was not introduced. Three processes and two managed services is not a
+scheduling problem, and adding one would be adding an operational surface nobody
+has yet needed.
+
+#### Refusing to start
+
+The rule: **a production process must fail loudly rather than serve while subtly
+wrong.** Two mechanisms, because one is not enough.
+
+`config/settings/prod.py` reads everything required without a fallback, so a
+missing variable raises at import. That covers absence.
+
+`apps/common/checks.py` covers everything absence does not, through Django's own
+check framework so it runs on every management command and every process start.
+In production it is an **error** to have any provider set to a fake, a selected
+provider whose credential is empty, `DEBUG` on, an empty or wildcard
+`ALLOWED_HOSTS`, open CORS, no broker, or a development secret key. Every one of
+those is inert outside production, gated on `IS_PRODUCTION`, which only the
+production settings module sets.
+
+The check that matters most is the fake-provider one, and it is worth saying why.
+Every other misconfiguration announces itself: a missing database URL crashes, a
+wrong host 400s. A production deployment that kept the fake payment gateway would
+take bookings, tell customers they had paid, move no money at all, and look
+completely healthy until somebody reconciled. It is detected by matching the
+dotted path against `fake`, `console`, `locmem`, `dummy` and `inmemory`, so a
+stand-in added later is caught without anybody remembering to update a list.
+
+#### Liveness and readiness are different questions
+
+| Endpoint | Answers | What an orchestrator does with it |
+| --- | --- | --- |
+| `/api/v1/health/live/` | Is the process running | Restart it |
+| `/api/v1/health/ready/` | Can it serve correctly | Take it out of the load balancer |
+| `/api/v1/health/` | The original combined check | Unchanged, for existing monitors |
+
+Liveness touches nothing, deliberately. A liveness probe that checks PostgreSQL
+restarts perfectly good web processes every time the database hiccups, turning a
+brief database problem into an outage. Readiness checks the database, the cache
+and whether the configuration is still coherent, which are the things a request
+genuinely cannot proceed without.
+
+**No third-party API is a readiness dependency.** Paystack being slow must not
+take this marketplace off the internet: browsing, booking, offers and job progress
+all work without it, and payment failures are already handled as payment
+failures.
+
+No health response carries a connection string, a driver message, a hostname or a
+credential. Every failure is a bare word and the detail goes to the logs, because
+the endpoints are unauthenticated.
+
+#### Logs
+
+JSON in production, one object per line, because logs are read by a machine
+before a person. Human-readable in development, where the audience really is a
+person at a terminal. No dependency was added: a JSON formatter is twenty lines
+of the standard library, and a structured logging package would bring a
+processor pipeline and its own opinions for no benefit at this size.
+
+**What must never be logged**: passwords, verification codes, tokens, card
+details, bank account numbers, provider keys, and raw provider payloads. The
+primary defence is that they are not passed to a logger in the first place, and
+the tests assert that per area. The formatter is the last line rather than the
+first: it drops any field whose name looks like a secret, with separators
+stripped so `api_key`, `apiKey` and `X-Api-Key` are one question.
+
+#### Request correlation
+
+Every request gets an id, returned as `X-Request-ID` and attached to every log
+line it produces. An incoming id is reused only when it is short and made
+entirely of characters that cannot break a log line, because a value that reaches
+log output is a way to forge a log line. It is never written to the database: it
+identifies one HTTP round trip, not a domain object, and a payout that outlives
+its request already has its own reference.
+
+Records made outside a request, which is every Celery task, carry a dash rather
+than an invented id. Financial tasks correlate through the references they
+already have: a transfer reference, a payment reference, a booking reference.
+
+#### The mobile production build
+
+`EXPO_PUBLIC_` values are inlined at build time, so a release built on a
+developer's machine ships pointing at their laptop. A production build now
+requires an HTTPS URL on a public host and refuses a private, loopback or
+link-local address at the first request with an explanation. The app holds no
+credential of any kind: payment happens on the provider's hosted page, so no
+Paystack key, secret or public, is ever in the bundle.
+
+#### What M7 did not change
+
+No domain model, no lifecycle, no invariant and no capability. The financial
+guarantees are exactly the ones M5 and M6 established, and the same tests hold
+them. Nothing was weakened to make a gate pass.
+
+
 ### How verticals stay modular
 
 This is the load-bearing idea. The `Booking` model never learns the vocabulary of

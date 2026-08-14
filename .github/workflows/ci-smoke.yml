@@ -1,0 +1,25 @@
+# The smallest possible workflow.
+#
+# It exists to answer one question when a run fails at startup: is the problem in
+# this repository, or is GitHub refusing to start any job at all? This checks out
+# nothing, installs nothing and depends on no service, so if it also fails to
+# start then no workflow here can, and the cause is outside the repository.
+#
+# See the CI section of README.md for the current evidence.
+name: ci-smoke
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Say hello
+        run: echo "A runner started and executed a step."

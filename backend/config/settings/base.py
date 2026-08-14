@@ -43,6 +43,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # First, so that every log line produced while handling a request carries the
+    # id, including ones written by middleware below it.
+    "apps.common.middleware.RequestIDMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "corsheaders.middleware.CorsMiddleware",
@@ -73,6 +76,20 @@ TEMPLATES = [
 ]
 
 DATABASES = {"default": env.db("DATABASE_URL")}
+
+# Reuse a connection for this many seconds rather than opening one per request.
+# Zero locally, where a new connection costs nothing and a stale one is
+# confusing; production sets it. Django holds connections per worker process, so
+# this is not a pool: the ceiling on PostgreSQL connections is worker processes
+# times threads, which is the number to watch when scaling out.
+DATABASES["default"]["CONN_MAX_AGE"] = env.int("DATABASE_CONN_MAX_AGE", default=0)
+# Checks a reused connection is still usable before handing it to a request,
+# which is what stops a database restart producing a wave of errors.
+DATABASES["default"]["CONN_HEALTH_CHECKS"] = env.bool("DATABASE_CONN_HEALTH_CHECKS", default=False)
+
+#: Only config.settings.prod sets this. Everything gated on it, which is every
+#: production configuration check, is inert in development and in tests.
+IS_PRODUCTION = False
 
 CACHES = {
     "default": {
@@ -382,14 +399,43 @@ BOOKING_OFFERS = {
 
 CORS_ALLOWED_ORIGINS: list[str] = env.list("DJANGO_CORS_ALLOWED_ORIGINS", default=[])
 
+# One JSON object per line when LOG_FORMAT is json, which is what production
+# sets: logs are read by a machine before a person, and a line needing a regex is
+# a line nobody greps correctly at three in the morning. Development keeps the
+# readable format, where the audience really is a person at a terminal.
+#
+# Every record carries the current request id, or a dash when there is no request
+# in flight, which is every Celery task. See apps/common/log.py for the rule
+# about what may never reach a log at all.
+LOG_FORMAT = env("LOG_FORMAT", default="console")
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "filters": {
+        "request_id": {"()": "apps.common.middleware.RequestIDFilter"},
+    },
     "formatters": {
-        "standard": {"format": "{asctime} {levelname} {name} {message}", "style": "{"},
+        "standard": {
+            "format": "{asctime} {levelname} [{request_id}] {name} {message}",
+            "style": "{",
+        },
+        "json": {"()": "apps.common.log.JSONFormatter"},
     },
     "handlers": {
-        "console": {"class": "logging.StreamHandler", "formatter": "standard"},
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "json" if LOG_FORMAT == "json" else "standard",
+            "filters": ["request_id"],
+        },
     },
     "root": {"handlers": ["console"], "level": env("DJANGO_LOG_LEVEL", default="INFO")},
+    "loggers": {
+        # Django logs every 4xx and 5xx here. Kept at WARNING so a flood of 404s
+        # from a scanner does not bury anything, and so 500s are always visible.
+        "django.request": {"level": "WARNING", "handlers": ["console"], "propagate": False},
+        # The financial domain. Its INFO lines are the audit trail for money
+        # moving, so they are never filtered out by a coarser root level.
+        "apps.payments": {"level": "INFO", "handlers": ["console"], "propagate": False},
+    },
 }

@@ -1,0 +1,20 @@
+# Never in an image. Production configuration comes from the platform, and a
+# stray .env would silently supply anything the platform forgot to set.
+.env
+.env.*
+**/.env
+
+# Local development state.
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+staticfiles/
+
+# Not needed to run the application.
+**/tests/
+docs/

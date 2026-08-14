@@ -1,3 +1,13 @@
+# Local development infrastructure: PostgreSQL and Redis only.
+#
+# The application itself is deliberately not here. It runs from the virtual
+# environment during development, which keeps the edit-reload loop instant and
+# avoids a rebuild for every change. The production process topology is a
+# different thing and lives in backend/Dockerfile and docs/deployment.md.
+#
+# The `app` profile below runs the three application processes against these
+# services, for checking the container actually works before deploying it. It is
+# opt-in: `docker compose --profile app up`.
 name: sync
 
 services:
@@ -30,6 +40,68 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+
+  # --- the application, opt-in --------------------------------------------
+  # Not started by a bare `docker compose up`. These exist to check the image
+  # runs and that the three processes work together, not for daily development.
+  #
+  # They read config.settings.prod, so they will refuse to start without real
+  # provider configuration. That is the point: it is the same refusal a
+  # deployment would give, discovered on a laptop instead.
+  api:
+    profiles: ["app"]
+    build:
+      context: ./backend
+    env_file: [.env]
+    environment:
+      DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-config.settings.prod}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+
+  worker:
+    profiles: ["app"]
+    build:
+      context: ./backend
+    command: celery -A config worker --loglevel=info --concurrency=4
+    env_file: [.env]
+    environment:
+      DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-config.settings.prod}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+
+  beat:
+    profiles: ["app"]
+    build:
+      context: ./backend
+    command: celery -A config beat --loglevel=info
+    env_file: [.env]
+    environment:
+      DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-config.settings.prod}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    # Exactly one. Two schedulers means every periodic task is queued twice, and
+    # while every task here is idempotent, it is still twice the load and twice
+    # the calls to Paystack. `deploy.replicas` is the one place this is stated
+    # in machine-readable form; see docs/deployment.md.
+    deploy:
+      replicas: 1
     restart: unless-stopped
 
 volumes:

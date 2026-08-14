@@ -7,6 +7,7 @@ Providers receive and fulfil that work through the same app.
 - `backend/` Django REST API
 - `mobile/` Expo React Native app
 - `docs/architecture.md` the architecture this implementation follows
+- `docs/deployment.md` what runs in production, and what to do when it breaks
 
 ## Prerequisites
 
@@ -238,11 +239,101 @@ sync-v1/
 └── .github/workflows/
 ```
 
+## Background work
+
+Two more processes, neither started by `runserver`. Nothing periodic happens
+without them: offers never expire, payments are never reconciled, and payouts are
+never sent.
+
+```bash
+cd backend
+celery -A config worker --loglevel=info    # runs the tasks
+celery -A config beat --loglevel=info      # queues the periodic ones
+```
+
+Exactly one scheduler, ever. Several workers is fine. Both need Redis, which
+`docker compose up -d` already provides.
+
+| Task | Every | What it does |
+| --- | --- | --- |
+| `expire_stale_offers` | 60s | Closes offers past their window, expires bookings nobody took |
+| `reconcile_pending_payments` | 5m | Asks the gateway about payments that never resolved |
+| `reconcile_payouts` | 5m | Resolves transfers whose outcome was never received |
+| `retire_stale_challenges` | 1h | Retires verification challenges that can no longer be used |
+| `sweep_financial_consistency` | 1h | Finds impossible financial states, repairs only the unambiguous |
+
+## Health
+
+| Endpoint | Answers |
+| --- | --- |
+| `/api/v1/health/live/` | Is the process running. Touches nothing |
+| `/api/v1/health/ready/` | Can it serve. Checks database, cache and configuration |
+| `/api/v1/health/` | The original combined check |
+
+## Production
+
+`docs/deployment.md` is the full account. The short version:
+
+- Three processes from one image: gunicorn, a Celery worker, one Celery beat.
+- Configuration comes from the platform's environment, never from a `.env` in the
+  image. `DJANGO_SETTINGS_MODULE=config.settings.prod`.
+- The process **refuses to start** in production with a fake provider wired in, a
+  missing credential for a provider it has selected, `DEBUG` on, a wildcard
+  `ALLOWED_HOSTS`, no broker, or a development secret key.
+
+Check a production configuration before deploying it:
+
+```bash
+DJANGO_SETTINGS_MODULE=config.settings.prod python manage.py check --deploy
+```
+
+**No provider account is configured, and nothing has been deployed.** Every
+external integration runs against a deterministic fake. No real payment, SMS,
+email or bank transfer has been made by this system.
+
+## Continuous integration
+
+**CI has never successfully started.** Every run since M0 ends in
+`startup_failure` with zero jobs, and this is not a claim that CI passes.
+
+The evidence, as of commit `f2d536d`:
+
+| Observation | Value |
+| --- | --- |
+| Latest run | `31839824778`, conclusion `startup_failure`, 0 jobs |
+| Manual dispatch | `31844192696`, resolved `.github/workflows/backend.yml`, ran 1 second, 0 jobs |
+| Workflow YAML | Parses locally; both workflows registered and `active` |
+| Actions | `enabled: true`, `allowed_actions: all` |
+| Run annotations | None available (`404`) |
+
+A `workflow_dispatch` run is the useful part: GitHub resolved the workflow path
+correctly and still started no job, which rules out the trigger and the file
+contents. `.github/workflows/ci-smoke.yml` exists to narrow it further, being a
+single `echo` with no checkout and no services; if that also fails to start, no
+workflow in this repository can, and the cause is outside it.
+
+What to check outside the repository: the account's Actions billing and spending
+limit, whether the account is in good standing, and whether any organisation or
+enterprise policy blocks runners. None of that is visible through the API with
+the current token scopes.
+
+Locally, everything CI would run passes. Run it with:
+
+```bash
+cd backend && ruff check . && ruff format --check . && mypy . && pytest
+cd mobile && npm run lint && npm run typecheck && npm test
+```
+
 ## Conventions
 
 - Settings are split by environment. Secrets come from the environment, never from
   a settings file. `prod.py` reads required values without a fallback so a missing
-  one stops the process rather than booting insecurely.
+  one stops the process rather than booting insecurely, and `apps/common/checks.py`
+  refuses at startup anything a missing variable would not catch.
+- Every external provider is an interface with a real adapter and a deterministic
+  fake. Development and tests use the fakes; production refuses them.
+- Logs are JSON in production and carry a request id. Nothing logs a password, a
+  verification code, a token, an account number or a provider key.
 - Domain models inherit `apps.common.models.BaseModel`, which gives them a UUID
   primary key and created and updated timestamps.
 - Money is stored as an integer number of kobo, never a float.
