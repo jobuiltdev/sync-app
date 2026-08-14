@@ -139,17 +139,24 @@ request, and that is enforced at creation.
 as `Capability.CREATE_BOOKING -> [PHONE_VERIFIED]`, checked before any write, so a
 refusal persists nothing. Email verification is deliberately not required: a
 provider on their way needs to reach the customer by phone, and demanding both
-costs conversion at the moment of commitment. M4 and M5 add capabilities to the
-same table without touching the booking domain.
+costs conversion at the moment of commitment. M4 and M5 each added a capability to
+the same table without touching the booking domain.
 
 **Deletion.** `customer`, `provider` and `service` are all `PROTECT`. A booking is
 a record of something that happened between two people and must outlive a profile
 tidy-up, so an account with bookings is deactivated rather than deleted.
 
-Deferred from the booking domain, with the milestone that owns each: quotes and
-pricing (M5), availability windows (later), the `Cancellation` model with fees
-(M5), `DISPUTED` (M7), and `DRAFT` / `QUOTED` / `PENDING_PAYMENT`, which are
-defined above but have no meaning until the milestones that produce them exist.
+**A booking carries the price it was agreed at.** `total_kobo` is snapshotted at
+creation from the named provider's price or the catalog price, and never rewritten.
+Added in M5 because a settlement needs an amount that a later price change cannot
+reach; the reasoning is in the money section below.
+
+Deferred from the booking domain, with the milestone that owns each: the `Quote`
+model and per-vertical pricing functions, availability windows, the `Cancellation`
+model with fees, `DISPUTED` (M7), and `DRAFT` / `QUOTED` / `PENDING_PAYMENT`, which
+are defined above but have no meaning until the milestones that produce them exist.
+M5 gave a booking a price without giving it a quote: one number agreed at creation
+is what settlement needs, and a line-item breakdown is what a quote adds.
 
 ### Offers and acceptance, as implemented in M4
 
@@ -213,6 +220,176 @@ expiry bounds.
 Deferred: offer waves and pool widening, ranking, availability windows, and any
 automatic re-dispatch after a decline.
 
+### Money, as implemented in M5
+
+M5 is the financial domain, not the payment integration. No gateway is involved:
+nothing charges a customer and nothing moves money to a bank. What exists is the
+record of what was earned, whose it is, and what has been asked for, built so that
+a transfer adapter can be added later without any of it being rewritten.
+
+**Three conflicts with earlier revisions of this document were resolved here, and
+the resolutions are the current design.**
+
+| This document used to say | What was built, and why |
+| --- | --- |
+| A `wallets/` app beside `payments/` | One `payments/` app. Splitting a settlement from the payout that draws on it puts an import boundary through the middle of one balance calculation, with no separate owner behind it. The gateway adapters land inside `payments/gateways/` when they arrive |
+| `ProviderWallet.available_kobo`, a stored balance | No balance column exists. It is derived on every read from the settlements and payouts themselves, which is the same principle the append-only ledger was reaching for. A stored balance is a number that can be wrong for a month before anybody notices |
+| `LedgerEntry`, signed amounts, `balance_after_kobo` | Not built. The ledger's job is to reconcile money flowing in two directions, which is a cash-versus-card problem, and cash payment does not exist yet. Building the general machine before the case that needs it would be guessing at the shape of the case |
+
+**Money is an integer number of kobo, everywhere, with no exception.** No float
+appears anywhere in `apps/payments`, and the one calculation the domain performs is
+a pure function over integers. A commission rate is basis points, an integer
+hundredth of a percent, precisely so that a percentage never invites a float in.
+
+#### Settlement
+
+A completed booking earns exactly one `BookingSettlement`, written in the same
+transaction as the completion itself. Either both happen or neither does, so there
+is no window in which a booking is finished but has earned nobody anything.
+
+```
+booking reaches COMPLETED -> settlement written, status PAYABLE
+```
+
+One status, deliberately. A settlement is only ever created for work that is
+already finished and confirmed, so it has no earlier state to sit in, and it is
+immutable, so it has no later one to move to. The field exists rather than being
+inferred because a dispute resolved in the customer's favour will need a
+compensating record with a state of its own, and adding it then must not mean
+teaching old rows what state they were always in.
+
+**Everything monetary on the row is a copy.** The gross comes from the booking's
+own agreed total, not from the Service. The rate applied is written onto the row,
+not looked up later. Verified live: raising the catalog price tenfold, setting a
+provider override to one kobo, and changing the commission rate all leave an
+existing settlement untouched, and the next booking picks up the new rate while the
+old one keeps its own.
+
+**The invariant is a database check constraint**, not an application assertion:
+
+```sql
+provider_amount_kobo = gross_amount_kobo - commission_amount_kobo
+```
+
+alongside non-negativity on all three amounts and a constraint that commission can
+never exceed the gross. The provider's share is derived by subtraction rather than
+by a second multiplication, which is what makes the equality exact rather than
+approximately true.
+
+**Rounding is floor division, so the fraction of a kobo goes to the provider.** A
+rounding rule has to be chosen deliberately, and the one that never rounds in our
+own favour is the one that can be defended to a provider reading their statement.
+
+#### The booking price
+
+Settlement needs an amount, and until M5 a booking carried none. `Booking.total_kobo`
+is now snapshotted at creation, for the same reason the address is: a catalog price
+and a provider's override are both mutable rows, and settling finished work against
+today's price would let a price change reach backwards into money already earned.
+
+A customer who names a provider is quoted that provider's price, override included.
+A customer who does not is quoted the catalog price, and whoever wins the broadcast
+takes the job at the price the customer already agreed to. Repricing after
+acceptance would mean the figure on the review screen was never binding, which is a
+worse promise than a provider occasionally earning their catalog rate.
+
+#### Commission
+
+**One flat rate, in settings, at 2000 basis points.** Section 11 records
+per-category commission as an open question, and answering it by adding a rate
+column to `Service` would settle a pricing decision nobody has taken. Moving the
+setting affects the next completed booking and can never reach a past one, because
+the rate each settlement used is on that settlement.
+
+#### Balance
+
+There is no balance to maintain, so there is nothing to drift:
+
+```
+available = sum(settlement.provider_amount)
+          - sum(payout.amount where REQUESTED or PROCESSING)
+          - sum(payout.amount where PAID)
+```
+
+Money in a requested or processing payout is subtracted although it has not left,
+because counting it as available is exactly how the same earnings get claimed twice.
+A failed or cancelled payout subtracts nothing, so the money returns to the balance
+by arithmetic rather than by anyone remembering to credit it back.
+
+Payouts are not allocated against particular settlements. A payout is a claim on a
+balance, and the balance is a sum over immutable rows on both sides, so an
+allocation table would be a third thing to keep in step with two sources of truth
+that already agree by construction.
+
+#### Payout lifecycle
+
+```
+REQUESTED -> PROCESSING -> PAID
+          -> CANCELLED              by the provider, while still REQUESTED
+          -> FAILED                 either state, by the trusted path
+```
+
+Actor-aware, like every other lifecycle here, and this time the actors are the whole
+point. Only `SYSTEM` and `ADMIN` appear on the edges ending in `PROCESSING` or
+`PAID`; a provider holds exactly one move, cancelling their own request, because
+cancelling releases money back to them and takes nothing from anybody. No endpoint
+in the API accepts a status, and no code path hands a provider a `SYSTEM` or `ADMIN`
+actor type. The trusted transitions live in the Django admin as named actions
+calling the same service function a transfer adapter will call.
+
+A failed payout is terminal rather than returning to `REQUESTED`. The money comes
+back to the balance either way, and a fresh request leaves a clean record of two
+attempts instead of one row that quietly changed its mind.
+
+#### Concurrency
+
+Two guarantees, neither trusted alone. Requesting a payout locks the provider's own
+row with `select_for_update`, so simultaneous requests serialise and the second
+reads a balance that already accounts for the first. Behind that, a partial unique
+index permits at most one payout per provider in `REQUESTED` or `PROCESSING`, so
+even if the reasoning above were wrong only one could commit. Settlement is the
+same shape: the booking row is locked, and a one-to-one constraint is the final
+word.
+
+Verified against a real database with real threads: two providers racing for one
+balance produce one payout and a non-negative balance, four at once produce one
+payout, and three simultaneous completions of one booking produce one settlement.
+
+#### Idempotency
+
+The mobile client already sends an `Idempotency-Key` header on anything that moves
+money. M5 is where the server half of that lands, and it is a field with a partial
+unique index rather than a new mechanism: `PayoutRequest.idempotency_key`, unique
+per provider when non-blank. A repeat carrying a key that already succeeded returns
+the payout that request created. Blank is the absence of a key rather than a key
+everybody shares, which is why the uniqueness is partial.
+
+Repeated booking completion needs no key. The lifecycle refuses a second move to
+`COMPLETED`, and underneath that the one-to-one constraint refuses a second
+settlement.
+
+#### Payout destination
+
+The minimum a transfer provider will need, and nothing beyond it. **The account
+number is not stored.** It arrives, it is used to show the provider what they typed,
+and what persists is an Argon2 hash, the last four digits, and an empty slot for the
+recipient token a transfer provider will issue. That is the same posture identity
+verification already takes with NIN and BVN, for the same reason.
+
+This is affordable because the adapter will be called at the moment the number is
+supplied, and from then on the token moves the money. Nothing stores a card number,
+a CVV, a bank password, or any provider secret, and none of those are needed to pay
+a Nigerian provider.
+
+#### Still deferred after M5
+
+Charging the customer at all, which is the largest single gap: no gateway, no
+payment intent, no escrow, and therefore no money actually entering the system.
+Transfer execution and webhooks, refunds and chargebacks, cash bookings and the
+ledger that inverts commission for them, cancellation fees, disputes reversing a
+settlement, background expiry of stale payouts, per-category commission, and
+accounting exports.
+
 ### How verticals stay modular
 
 This is the load-bearing idea. The `Booking` model never learns the vocabulary of
@@ -249,8 +426,8 @@ modification.
 
 | Concern | Choice | Boundary |
 | --- | --- | --- |
-| Payments | Paystack (cards, transfer, USSD) | `payments/gateways/base.py` |
-| Payouts | Paystack Transfers | `wallets/payouts/base.py` |
+| Payments | Paystack (cards, transfer, USSD) | `payments/gateways/base.py`, not built |
+| Payouts | Paystack Transfers | `payments/transfers/base.py` |
 | Transactional email | Resend or AWS SES | `notifications/email/base.py` |
 | SMS | Termii, with a fallback provider | `notifications/sms/base.py` |
 | Identity verification | Prembly, Youverify or VerifyMe | `providers/identity/base.py` |
@@ -298,17 +475,32 @@ Gated operations are named as capabilities and mapped to requirements in one pol
 module, so the API, the admin, and any future client agree on what is blocked.
 
 ```python
-# apps/accounts/policy.py
+# apps/accounts/policy.py, as implemented
 
 CAPABILITY_REQUIREMENTS = {
-    Capability.CREATE_BOOKING:  [EMAIL_VERIFIED, PHONE_VERIFIED],
-    Capability.MAKE_PAYMENT:    [EMAIL_VERIFIED, PHONE_VERIFIED],
-    Capability.LEAVE_REVIEW:    [EMAIL_VERIFIED],
-    Capability.ACCEPT_JOB:      [EMAIL_VERIFIED, PHONE_VERIFIED, PROVIDER_APPROVED],
-    Capability.REQUEST_PAYOUT:  [EMAIL_VERIFIED, PHONE_VERIFIED, PROVIDER_APPROVED,
-                                 PAYOUT_ACCOUNT_VERIFIED],
+    Capability.CREATE_BOOKING:  [PHONE_VERIFIED],
+    Capability.ACCEPT_JOB:      [PHONE_VERIFIED, EMAIL_VERIFIED],
+    Capability.REQUEST_PAYOUT:  [PHONE_VERIFIED, EMAIL_VERIFIED],
 }
 ```
+
+`MAKE_PAYMENT` and `LEAVE_REVIEW` are rows for the milestones that create them.
+
+**`PROVIDER_APPROVED` is deliberately not a requirement in this table**, although an
+earlier revision of this document listed it on both `ACCEPT_JOB` and
+`REQUEST_PAYOUT`. Approval is enforced structurally instead, and more strictly than
+a policy row would manage: only an approved provider is ever sent an offer, so an
+unapproved one cannot reach a job at all, and cannot then reach the settlement that
+a payout would draw on. Adding the row would change nothing except the wording of
+the refusal, and it would change it for the worse, since an unapproved provider
+asking for a payout would be told about approval when the true answer is that they
+have not earned anything.
+
+`PAYOUT_ACCOUNT_VERIFIED` is likewise not a requirement. Having somewhere to be paid
+is a fact about the payout, not about the account, so it is validated by the payout
+domain and refused with `INVALID_PAYOUT_DESTINATION`. Verifying that an account
+belongs to the person claiming it needs a name enquiry at a bank, which is a
+transfer provider's job and arrives with the adapter.
 
 A service may demand more than the global policy, never less, through
 `Service.additional_requirements`. Dispatch and errands carry higher abuse risk and
@@ -504,7 +696,7 @@ than failed.
 
 ## 5. Django architecture
 
-Nine domain apps under `backend/apps/`. The split follows lifecycle ownership, not
+Eight domain apps under `backend/apps/`. The split follows lifecycle ownership, not
 table count. Anything that would be a single module today lives inside the app that
 owns its lifecycle rather than becoming its own app.
 
@@ -517,17 +709,20 @@ backend/apps/
 ├── catalog/        ServiceCategory, Service, options, specs/ registry
 ├── providers/      profile, verification, offered services, areas, availability
 ├── bookings/       Quote, Booking, status events, Offer, matching engine
-├── payments/       intents, transactions, gateway adapters, webhooks
-├── wallets/        provider wallet, ledger, payout accounts, payouts
+├── payments/       settlements, earnings, payouts, payout destinations,
+│                   and later the gateway adapters and webhooks
 ├── reviews/        ratings and review moderation
 ├── disputes/       dispute threads and resolution
 └── notifications/  templates, email, SMS and push delivery, preferences
 ```
 
-Matching lives inside `bookings` as `bookings/matching.py`, because an offer is a
+Matching lives inside `bookings` as `bookings/dispatch.py`, because an offer is a
 stage of a booking's life and splitting it would add an import boundary with no
 owner behind it. The capability policy lives in `accounts` because that is where the
-facts it reads are stored.
+facts it reads are stored. `payments` owns the whole financial domain for the same
+reason matching is not its own app: an earlier revision of this document split it
+into `payments` and `wallets`, which would have put an import boundary through the
+middle of a single balance calculation.
 
 ### Conventions
 
@@ -609,21 +804,34 @@ noted as append-only.
   `expires_at`, `responded_at`, `response`, `decline_reason`
 - **Cancellation**: `booking`, `cancelled_by`, `reason_code`, `note`, `fee_kobo`
 
-### payments and wallets
+### payments
+
+Built in M5:
+
+- **BookingSettlement**: `booking` (1:1), `provider`, `gross_amount_kobo`,
+  `commission_amount_kobo`, `provider_amount_kobo`, `commission_rate_bps`,
+  `currency`, `status`. Written once, never updated
+- **PayoutRequest**: `provider`, `amount_kobo`, `currency`, `status`, `requested_at`,
+  `processed_at`, `failure_reason`, `idempotency_key`
+- **PayoutDestination**: `provider` (1:1), `bank_code`, `bank_name`, `account_name`,
+  `account_number_last4`, `account_number_hash`, `provider_reference`, `is_active`.
+  The account number itself is not a field on this model and is not stored
+
+Deferred to the milestone that charges a customer:
 
 - **PaymentIntent**: `booking`, `customer`, `amount_kobo`, `method`, `gateway`,
   `gateway_reference`, `status`, `authorization_url`, `idempotency_key`
 - **Transaction**, **WebhookEvent** (unique `event_id`), **SavedAuthorization**
-- **ProviderWallet**: `provider` (1:1), `available_kobo`, `pending_kobo`
-- **LedgerEntry** (append-only): `wallet`, `booking`, `type`, `amount_kobo` (signed),
-  `balance_after_kobo`, `description`
-- **PayoutAccount**, **Payout**
+- **LedgerEntry**, if and when cash bookings need it
 
-The ledger is why cash works. On a card booking Sync holds the money and releases the
-provider's share on completion. On a cash booking the provider is paid directly, so
-commission is owed the other way and lands as a negative ledger entry that nets
-against future earnings. Without an append-only ledger, cash and card would need two
-incompatible accounting paths.
+A ledger is how cash would work. On a card booking Sync holds the money and releases
+the provider's share on completion; on a cash booking the provider is paid directly,
+so commission is owed the other way and would land as a negative entry netting
+against future earnings. Neither payment direction exists yet, and building the
+general machine before the case that needs it would be guessing at the shape of the
+case. What M5 has instead is a settlement per completed booking and a balance summed
+from immutable rows, which is enough for money owed and not yet enough for money in
+two directions.
 
 ### reviews and disputes
 
@@ -708,9 +916,19 @@ PUT    /api/v1/provider/availability
 GET    /api/v1/provider/offers
 POST   /api/v1/provider/offers/{id}/accept       gated, contended, locked
 POST   /api/v1/provider/bookings/{id}/status
-GET    /api/v1/provider/wallet
-POST   /api/v1/provider/payouts                  gated
+GET    /api/v1/provider/earnings                 derived, never a stored balance
+GET    /api/v1/provider/earnings/settlements
+GET    /api/v1/provider/payouts
+POST   /api/v1/provider/payouts/request          gated, idempotent, locked
+GET    /api/v1/provider/payouts/{id}
+POST   /api/v1/provider/payouts/{id}/cancel      the provider's only lifecycle move
+GET    /api/v1/provider/payout-destination
+PUT    /api/v1/provider/payout-destination
 ```
+
+There is deliberately no route by which a provider marks a payout processed or paid.
+Those transitions exist only in the admin and in the service function a future
+transfer adapter will call.
 
 ### Machine to machine
 
@@ -781,8 +999,15 @@ app/
     │   ├── earnings.tsx
     │   └── account.tsx
     ├── onboarding/
+    ├── payout/[id].tsx
     └── job/[id].tsx
 ```
+
+The provider surfaces are built but the provider tab bar is not, so `offers`,
+`earnings`, `payouts`, `payout/[id]`, `payout-request` and `payout-destination`
+currently sit in the one `(app)` group beside the customer screens and are reached
+by direct navigation. Splitting the two role stacks is a navigation change on its
+own, and doing it inside a domain milestone would mix two kinds of risk.
 
 Three details carry weight. The verification gate is a sheet raised over the current
 screen, not a route push, so a customer who verifies mid-booking returns to exactly
@@ -840,7 +1065,8 @@ Phase 1 ships light only, with tokens structured so dark mode is a palette swap.
 | M2 | Catalog and specs: categories, services, spec registry, pricing, home and browse | Six categories browsable with real content and prices, without an account |
 | M3 | Booking core: Quote, Booking, state machine, status events, request flow, Cleaning only | A cleaning is requested, priced, and tracked through every state |
 | M4 | Provider side: onboarding, documents, identity check, admin review, availability, matching, offers | A verified provider receives an offer, accepts, and completes the job |
-| M5 | Money: Paystack charge and webhook, escrow release, commission, ledger, payouts, cash | Real money in, correct split, real payout out |
+| M5a | Financial domain: booking price snapshot, settlement, commission, derived earnings, payout lifecycle, payout destination | A completed job earns a settlement, a provider sees a balance and requests a payout, with no gateway involved |
+| M5b | Payment integration: Paystack charge and webhook, escrow release, transfers, cash and the ledger it needs | Real money in, correct split, real payout out |
 | M6 | Remaining verticals, each as a spec plus a details step | All six live, core booking code unchanged since M3 |
 | M7 | Trust and operations: reviews, disputes, notifications, admin hardening, manual assignment | Operations can run the marketplace without a developer |
 | M8 | Launch readiness: performance, error tracking, analytics, security review, store submission | Builds submitted to both stores |
@@ -865,20 +1091,32 @@ fix it. That is the point of doing M3 on a single vertical.
    backend, so both print rather than send. Nobody on a real device can receive a
    code until providers are chosen, credentialed and set. Termii is the documented
    intention for SMS. This is the last thing standing between the current build
-   and a customer booking, or a provider accepting, unaided.
+   and a customer booking, a provider accepting, or a provider withdrawing,
+   unaided.
 
-   `ACCEPT_JOB` is now settled at `PHONE_VERIFIED` plus `EMAIL_VERIFIED`.
-   `REQUEST_PAYOUT` (M5) is still an empty row in the same table.
+   The capability table is now settled for every capability that exists:
+   `CREATE_BOOKING` at phone, `ACCEPT_JOB` and `REQUEST_PAYOUT` at phone plus
+   email.
+
+0b. **No money enters the system.** M5 built the record of what is owed, not the
+   means of paying it. Nothing charges a customer, nothing transfers to a bank,
+   and a settlement is therefore a claim against money Sync does not yet hold. In
+   production that ordering would be wrong, and the payment integration has to
+   land before any of this is switched on for real providers.
 
 1. **Local infrastructure.** Docker Compose is the chosen approach and the file is in
    the repository, but Docker Desktop must be installed on each development machine.
 2. **Escrow posture.** Holding customer funds between payment and completion is what
    makes the marketplace trustworthy, and it means Sync holds money it does not own.
    This has CBN and licensing implications at scale. The engineering design is the
-   same either way. Worth legal advice before M5.
-3. **Commission model.** Flat across categories or per-category. Dispatch and laundry
-   have thin margins where a flat 20 percent does not work. Per-category, configurable
-   on the `Service` row, is the recommendation and is already in the model.
+   same either way. Worth legal advice before the payment integration.
+3. **Commission model.** Still open, and deliberately not answered by M5. The
+   implementation is one flat rate at 2000 basis points in `PLATFORM_COMMISSION`,
+   with the rate applied copied onto each settlement. Per-category remains the
+   recommendation, since dispatch and laundry have thin margins where a flat 20
+   percent does not work, but it is a pricing decision rather than an engineering
+   one. Moving to per-category is a rate column on `Service` read at settlement
+   time, which changes one line of `apps/payments/services.py` and no history.
 4. **Which requirements gate which actions.** The policy table in section 3 trades
    conversion against abuse. The specific question is whether a first booking should
    require phone verification or only email. The recommendation is both for dispatch
@@ -897,6 +1135,8 @@ fix it. That is the point of doing M3 on a single vertical.
 | Network flakiness | A dropped response produces duplicate bookings | Idempotency keys, backoff, small payloads, honest offline states |
 | SMS cost and abuse | Phone verification can be weaponised against a stranger | Per-destination limits, resend cooldown, attempt cap |
 | Offer race conditions | Several providers can accept within milliseconds | Accept runs in a transaction with `select_for_update` |
+| Payout double-spend | Two devices requesting the same balance pays it out twice | Provider row locked, one live payout per provider enforced by a partial unique index, balance derived not stored |
+| Payout destination exposure | A stored bank account number is a standing liability | Only a hash and the last four digits persist. The full number is never a field |
 | Home entry safety | A stranger in a customer's home. One incident is existential | Approval gates job access, identity shown before arrival, disputes |
 | Dev build requirement | Google sign-in, maps and push all break Expo Go, now at M1 | EAS dev builds from M0, OAuth client ids before M1 |
 | Multi-vertical dilution | Six categories at once risks six mediocre experiences | M3 proves the core on one vertical first |

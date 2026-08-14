@@ -83,6 +83,13 @@ class Booking(BaseModel):
         null=True, blank=True, help_text="Null for an on-demand request."
     )
 
+    #: What the customer agreed to pay, in kobo, fixed at creation and never
+    #: rewritten. A snapshot for the same reason the address is one: the catalog
+    #: price and a provider's override are both mutable rows, and settling a
+    #: finished job against today's price would let a price change reach into last
+    #: month's money. Everything downstream of completion reads this field.
+    total_kobo = models.BigIntegerField(default=0)
+
     # --- address snapshot, taken at creation and never rewritten ---------------
     source_address = models.ForeignKey(
         Address,
@@ -123,6 +130,10 @@ class Booking(BaseModel):
                     | models.Q(address_latitude__isnull=False, address_longitude__isnull=False)
                 ),
                 name="bookings_booking_coordinates_paired",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(total_kobo__gte=0),
+                name="bookings_booking_total_not_negative",
             ),
         ]
         indexes = [

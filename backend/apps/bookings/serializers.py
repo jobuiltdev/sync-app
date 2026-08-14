@@ -55,6 +55,7 @@ class BookingSummarySerializer(serializers.ModelSerializer):
             "service_name",
             "provider_name",
             "address_summary",
+            "total_kobo",
             "scheduled_for",
             "created_at",
         ]
@@ -85,6 +86,7 @@ class BookingDetailSerializer(serializers.ModelSerializer):
             "spec_key",
             "details",
             "address",
+            "total_kobo",
             "scheduled_for",
             "completed_at",
             "cancelled_at",

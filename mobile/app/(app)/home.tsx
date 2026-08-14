@@ -67,6 +67,8 @@ export default function HomeScreen() {
 
         <Button label="Your bookings" variant="secondary" onPress={() => router.push('/bookings')} />
 
+        <Button label="Earnings" variant="secondary" onPress={() => router.push('/earnings')} />
+
         <Button
           label="Sign out"
           variant="secondary"

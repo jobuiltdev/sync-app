@@ -36,6 +36,29 @@ class ProviderUnavailable(APIError):
     default_detail = "That provider is not available for this service in your area."
 
 
+def agreed_price_kobo(service: Service, provider: ProviderProfile | None) -> int:
+    """What this booking costs, decided once, at the moment it is requested.
+
+    A customer who named a provider is quoted that provider's price, override
+    included. A customer who did not is quoted the catalog price, and the provider
+    who wins the broadcast takes the job at the price the customer already agreed
+    to. Repricing a job after a provider accepts would mean the figure shown on the
+    review screen was never binding, which is a worse promise than a provider
+    occasionally earning their catalog rate instead of their override.
+
+    Returns kobo, always an integer. There is no floating point anywhere in the
+    money path, here or downstream.
+    """
+    from apps.providers.models import ProviderService
+
+    if provider is not None:
+        offering = ProviderService.objects.filter(provider=provider, service=service).first()
+        if offering is not None:
+            return offering.effective_price_kobo
+
+    return service.base_price_kobo
+
+
 def transition(
     booking: Booking,
     target: str,
@@ -97,6 +120,19 @@ def transition(
             metadata=metadata or {},
         )
 
+        if target == BookingStatus.COMPLETED:
+            # Finishing a job is what makes money owed, so the settlement is
+            # written in the same transaction as the completion. Either both
+            # happen or neither does, and there is no window in which a booking is
+            # complete but has earned nobody anything.
+            #
+            # An explicit call rather than a signal: this is the one place a
+            # booking becomes money, and it should be readable here. The import is
+            # local because payments depends on bookings for the Booking itself.
+            from apps.payments.services import create_settlement
+
+            create_settlement(booking)
+
     return booking
 
 
@@ -142,6 +178,7 @@ def create_booking(
         details=details,
         scheduled_for=scheduled_for,
         status=BookingStatus.MATCHING,
+        total_kobo=agreed_price_kobo(service, provider),
     )
     booking.snapshot_address(address)
     booking.save()

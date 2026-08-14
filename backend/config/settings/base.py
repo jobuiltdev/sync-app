@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "apps.catalog",
     "apps.providers",
     "apps.bookings",
+    "apps.payments",
 ]
 
 MIDDLEWARE = [
@@ -170,6 +171,9 @@ SPECTACULAR_SETTINGS = {
         "BookingStatus": "apps.bookings.state.BookingStatus",
         "OfferStatus": "apps.bookings.offers.OfferStatus",
         "OfferKind": "apps.bookings.offers.OfferKind",
+        "PayoutStatus": "apps.payments.payouts.PayoutStatus",
+        "SettlementStatus": "apps.payments.settlements.SettlementStatus",
+        "Currency": "apps.payments.money.Currency",
     },
 }
 
@@ -203,6 +207,20 @@ EMAIL_VERIFICATION = {
 # mail provider is configured.
 EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Sync <no-reply@sync.ng>")
+
+# What Sync keeps from a completed booking, in basis points: an integer
+# hundredth of a percent, so 2000 is twenty percent. Basis points rather than a
+# percentage because the whole money path is integer arithmetic and a percentage
+# invites a float into it.
+#
+# One flat rate across every category. docs/architecture.md records per-category
+# commission as an open question, and answering it here by quietly adding a rate
+# column to Service would settle a pricing decision nobody has taken. The rate
+# each settlement used is copied onto that settlement, so moving this value
+# affects the next completed booking and can never reach a past one.
+PLATFORM_COMMISSION = {
+    "RATE_BPS": env.int("PLATFORM_COMMISSION_RATE_BPS", default=2000),
+}
 
 # How long a provider has to answer an offer. Long enough that somebody working
 # does not lose a job by not looking at their phone, short enough that a customer

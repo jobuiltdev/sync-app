@@ -5,8 +5,8 @@ is how an API ends up enforcing a rule on one path and forgetting it on another.
 
 Verification state lives on the User (M1) and the ProviderProfile (M2); this module
 is the only place that decides what that state permits. M3 is the first consumer.
-M4 adds ACCEPT_JOB, M5 adds REQUEST_PAYOUT, and neither needs to change anything
-here beyond adding a row.
+M4 added ACCEPT_JOB and M5 added REQUEST_PAYOUT, each of them a row in the table
+below and nothing else.
 """
 
 from dataclasses import dataclass
@@ -23,6 +23,7 @@ class Capability(models.TextChoices):
 
     CREATE_BOOKING = "CREATE_BOOKING", "Create a booking"
     ACCEPT_JOB = "ACCEPT_JOB", "Accept a job offer"
+    REQUEST_PAYOUT = "REQUEST_PAYOUT", "Request a payout of your earnings"
 
 
 class Requirement(models.TextChoices):
@@ -38,9 +39,21 @@ class Requirement(models.TextChoices):
 #: into someone's home, so both contact channels must be proven: the phone so the
 #: customer can reach them on the day, the email as a second, harder to churn
 #: identifier for the account behind the work.
+#: Asking to be paid is held to the same bar as accepting work, and for a
+#: related reason. Money leaving the platform towards an account nobody has
+#: proven they can be reached at is the shape most payout fraud takes, so both
+#: channels must be answerable before the first naira moves.
+#:
+#: Provider approval is deliberately not a row here. It is already structural:
+#: earnings come from settlements, settlements come from completed bookings, and
+#: only an approved provider is ever offered a booking in the first place. An
+#: unapproved provider therefore has a balance of zero, and adding the
+#: requirement would refuse them with a message about approval when the honest
+#: answer is that they have not earned anything.
 CAPABILITY_REQUIREMENTS: dict[str, list[str]] = {
     Capability.CREATE_BOOKING: [Requirement.PHONE_VERIFIED],
     Capability.ACCEPT_JOB: [Requirement.PHONE_VERIFIED, Requirement.EMAIL_VERIFIED],
+    Capability.REQUEST_PAYOUT: [Requirement.PHONE_VERIFIED, Requirement.EMAIL_VERIFIED],
 }
 
 
