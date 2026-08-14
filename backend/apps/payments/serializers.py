@@ -78,6 +78,12 @@ class PayoutSerializer(serializers.ModelSerializer):
             "requested_at",
             "processed_at",
             "failure_reason",
+            # Our own transfer reference, and when it was submitted. Not a
+            # provider credential: it is a handle we invented, and it is what a
+            # provider quotes to support when they ask where their money is.
+            # The provider's own reference is deliberately not exposed.
+            "transfer_reference",
+            "submitted_at",
             "is_cancellable",
             "allowed_transitions",
             "created_at",

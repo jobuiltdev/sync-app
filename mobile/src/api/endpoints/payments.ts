@@ -48,6 +48,10 @@ export interface Payout {
   requested_at: string;
   processed_at: string | null;
   failure_reason: string;
+  /** Set once a transfer has been submitted, or may have been. A payout that
+   *  carries one is being resolved with the bank and is never re-sent. */
+  transfer_reference: string;
+  submitted_at: string | null;
   /** Whether the server will accept a cancel. Read, never recomputed: the
    *  lifecycle rules live in one place and it is not this one. */
   is_cancellable: boolean;
@@ -158,7 +162,7 @@ export const paymentKeys = {
 
 const STATUS_LABELS: Record<PayoutStatus, string> = {
   REQUESTED: 'Requested',
-  PROCESSING: 'On its way',
+  PROCESSING: 'On its way to your bank',
   PAID: 'Paid',
   FAILED: 'Failed',
   CANCELLED: 'Cancelled',
@@ -167,4 +171,40 @@ const STATUS_LABELS: Record<PayoutStatus, string> = {
 /** Status codes are for branching; this is what a provider reads. */
 export function payoutStatusLabel(status: PayoutStatus): string {
   return STATUS_LABELS[status] ?? status;
+}
+
+/**
+ * What a provider should be told is happening, which is not always the status.
+ *
+ * A payout that has been submitted and not yet resolved is the one case where
+ * the bare status undersells the situation: the money has left, or may have, and
+ * the honest thing to say is that it is being confirmed rather than that it is
+ * merely processing.
+ */
+export function payoutStageMessage(payout: Payout): string {
+  if (payout.status === 'PROCESSING' && payout.transfer_reference) {
+    return 'Sent to your bank. We are confirming it, which usually takes a few minutes.';
+  }
+  if (payout.status === 'PROCESSING') {
+    return 'Being prepared.';
+  }
+  if (payout.status === 'REQUESTED') {
+    return 'Waiting to be sent. You can still cancel it.';
+  }
+  if (payout.status === 'FAILED') {
+    return payout.failure_reason
+      ? `${payout.failure_reason} The money is back in your balance.`
+      : 'That transfer did not go through. The money is back in your balance.';
+  }
+  if (payout.status === 'CANCELLED') {
+    return 'You cancelled this. The money is back in your balance.';
+  }
+  return 'Sent to your bank account.';
+}
+
+/** Whether the app should keep asking. A payout being confirmed with a bank
+ *  resolves on its own within minutes, and there is nothing for the provider to
+ *  do but watch, so the screen watches for them. */
+export function isPayoutSettling(payout: Payout | undefined): boolean {
+  return payout?.status === 'REQUESTED' || payout?.status === 'PROCESSING';
 }

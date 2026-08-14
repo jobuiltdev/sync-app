@@ -276,6 +276,103 @@ PAYSTACK = {
 # it. Paystack resolves account numbers, so the same credentials serve both.
 BANK_RESOLVER = env("BANK_RESOLVER", default="apps.payments.banks.fake.FakeBankResolver")
 
+# --- background work ------------------------------------------------------
+# Celery over the Redis that is already here for the cache, which is what
+# docs/architecture.md has specified since M0. Importing Django starts nothing:
+# a worker and a scheduler are separate processes, started deliberately.
+#
+#   worker:    celery -A config worker --loglevel=info
+#   scheduler: celery -A config beat --loglevel=info
+CELERY_BROKER_URL = env("CELERY_BROKER_URL", default=env("REDIS_URL"))
+# Results are stored so an operator can ask what a task returned. Small payloads
+# with a short life: nothing here needs a task result a day later.
+CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default=env("REDIS_URL"))
+CELERY_RESULT_EXPIRES = 3600
+
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_ENABLE_UTC = True
+
+# A task that has not finished in five minutes is stuck. The soft limit raises an
+# exception the task can still record something from; the hard one kills it.
+CELERY_TASK_SOFT_TIME_LIMIT = env.int("CELERY_TASK_SOFT_TIME_LIMIT", default=300)
+CELERY_TASK_TIME_LIMIT = env.int("CELERY_TASK_TIME_LIMIT", default=360)
+
+# Acknowledge after the task finishes, so a worker killed mid-task returns the
+# job to the queue rather than losing it. Safe because every task here is
+# idempotent, which is the precondition for late acknowledgement.
+CELERY_TASK_ACKS_LATE = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_WORKER_CONCURRENCY = env.int("CELERY_WORKER_CONCURRENCY", default=4)
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+
+# How much each sweep looks at in one run. Bounded so a bad day cannot produce a
+# task that holds locks for minutes; whatever is left is picked up next time.
+TASK_BATCH_SIZE = env.int("TASK_BATCH_SIZE", default=200)
+
+# How the periodic work is spaced. Conservative on purpose: two of these talk to
+# Paystack, and a tight schedule against a rate-limited API is its own outage.
+# Every interval is seconds and every one is configurable.
+CELERY_BEAT_SCHEDULE = {
+    "expire-stale-offers": {
+        "task": "apps.bookings.tasks.expire_stale_offers",
+        # Offers expire on a fifteen minute window, so a minute of lag either way
+        # costs a provider nothing and keeps a customer from waiting on a job
+        # nobody can take any more.
+        "schedule": env.int("SCHEDULE_OFFER_EXPIRY_SECONDS", default=60),
+    },
+    "reconcile-pending-payments": {
+        "task": "apps.payments.tasks.reconcile_pending_payments",
+        # Talks to the payment provider. Five minutes is far more often than a
+        # customer waiting on a slow bank transfer needs, and gentle on the API.
+        "schedule": env.int("SCHEDULE_PAYMENT_RECONCILIATION_SECONDS", default=300),
+    },
+    "reconcile-payouts": {
+        "task": "apps.payments.tasks.reconcile_payouts",
+        # The one that resolves a submitted transfer whose outcome we never saw.
+        "schedule": env.int("SCHEDULE_PAYOUT_RECONCILIATION_SECONDS", default=300),
+    },
+    "retire-stale-challenges": {
+        "task": "apps.accounts.tasks.retire_stale_challenges",
+        # Housekeeping. Hourly is plenty for something that only tidies rows that
+        # are already unusable.
+        "schedule": env.int("SCHEDULE_CHALLENGE_CLEANUP_SECONDS", default=3600),
+    },
+    "sweep-financial-consistency": {
+        "task": "apps.payments.tasks.sweep_financial_consistency",
+        # Reads our own rows only. Hourly, because an anomaly nobody has noticed
+        # for an hour is not much worse than one nobody has noticed for a minute,
+        # and this is the slowest query of the five.
+        "schedule": env.int("SCHEDULE_CONSISTENCY_SWEEP_SECONDS", default=3600),
+    },
+}
+
+# When a payment is old enough to be worth asking the provider about. Shorter
+# than this and we would be chasing customers who are still typing their card
+# number into the checkout page.
+PAYMENT_RECONCILIATION = {
+    "PENDING_AFTER_SECONDS": env.int("PAYMENT_PENDING_AFTER_SECONDS", default=900),
+    # After this, a payment nobody can resolve stops being swept and is left for
+    # an operator. Sweeping the same unanswerable payment forever is how a real
+    # problem gets lost among noise.
+    "GIVE_UP_AFTER_SECONDS": env.int("PAYMENT_GIVE_UP_AFTER_SECONDS", default=7 * 24 * 3600),
+}
+
+# How long a submitted transfer may sit unresolved before it is flagged for a
+# person. The provider usually answers in seconds; an hour means something is
+# wrong that reconciliation alone will not fix.
+PAYOUT_EXECUTION = {
+    "STALE_AFTER_SECONDS": env.int("PAYOUT_STALE_AFTER_SECONDS", default=3600),
+}
+
+# Moves money out to providers. The fake submits nothing and reports every
+# transfer as pending until a test says otherwise.
+PAYOUT_TRANSFER_PROVIDER = env(
+    "PAYOUT_TRANSFER_PROVIDER", default="apps.payments.transfers.fake.FakeTransferProvider"
+)
+
 # How long a provider has to answer an offer. Long enough that somebody working
 # does not lose a job by not looking at their phone, short enough that a customer
 # is not left waiting on a provider who has stopped reading.

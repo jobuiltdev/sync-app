@@ -10,6 +10,7 @@ import {
 import {
   type PayoutDestinationInput,
   cancelPayout,
+  isPayoutSettling,
   fetchBanks,
   fetchEarnings,
   fetchPayout,
@@ -44,11 +45,21 @@ export function usePayouts() {
   });
 }
 
+/**
+ * One payout, refetched while it is still moving.
+ *
+ * A submitted transfer is resolved by a background task within minutes, and the
+ * provider has nothing to do but wait, so the screen asks for them rather than
+ * making them pull to refresh. Polling stops the moment it reaches a terminal
+ * state, and the server decides which those are.
+ */
 export function usePayout(id: string) {
   return useQuery({
     queryKey: paymentKeys.payout(id),
     queryFn: ({ signal }) => fetchPayout(id, signal),
     enabled: Boolean(id),
+    refetchInterval: (query) => (isPayoutSettling(query.state.data) ? 15_000 : false),
+    refetchOnWindowFocus: true,
   });
 }
 

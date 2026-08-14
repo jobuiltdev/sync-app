@@ -2,7 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { payoutStatusLabel } from '@/api/endpoints/payments';
+import { payoutStageMessage, payoutStatusLabel } from '@/api/endpoints/payments';
 import { Button } from '@/components/ui/Button';
 import { useCancelPayout, usePayout } from '@/features/payments/hooks';
 import { toPayoutOutcome } from '@/features/payments/outcomes';
@@ -20,7 +20,7 @@ import { colors, fontSizes, fontWeights, radii, spacing } from '@/theme/tokens';
 export default function PayoutDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { data: payout, isPending, error, refetch } = usePayout(id);
+  const { data: payout, isPending, error, refetch, isFetching } = usePayout(id);
   const cancel = useCancelPayout();
 
   if (isPending) {
@@ -51,7 +51,17 @@ export default function PayoutDetailScreen() {
         </View>
 
         <View style={styles.card}>
+          <Text style={styles.body}>{payoutStageMessage(payout)}</Text>
+          {payout.transfer_reference ? (
+            <Text style={styles.muted}>Reference {payout.transfer_reference}</Text>
+          ) : null}
+        </View>
+
+        <View style={styles.card}>
           <Row label="Requested" value={new Date(payout.requested_at).toLocaleString('en-NG')} />
+          {payout.submitted_at ? (
+            <Row label="Sent" value={new Date(payout.submitted_at).toLocaleString('en-NG')} />
+          ) : null}
           {payout.processed_at ? (
             <Row label="Resolved" value={new Date(payout.processed_at).toLocaleString('en-NG')} />
           ) : null}
@@ -75,6 +85,13 @@ export default function PayoutDetailScreen() {
             <Button label="Refresh" variant="secondary" onPress={() => refetch()} />
           </View>
         ) : null}
+
+        <Button
+          label="Refresh"
+          variant="secondary"
+          loading={isFetching}
+          onPress={() => refetch()}
+        />
 
         {payout.is_cancellable ? (
           <Button

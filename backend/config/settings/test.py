@@ -33,3 +33,16 @@ EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 PAYSTACK = {**PAYSTACK, "SECRET_KEY": "", "PUBLIC_KEY": ""}  # noqa: F405
 TERMII = {**TERMII, "API_KEY": ""}  # noqa: F405
 RESEND = {**RESEND, "API_KEY": ""}  # noqa: F405
+
+# Tasks run inline, in the calling process, in the calling transaction. This is
+# what makes the suite runnable with no worker and no broker: a test calls the
+# task like a function and sees its effect immediately, and no test can pass by
+# accident because a worker happened to be up.
+CELERY_TASK_ALWAYS_EAGER = True
+CELERY_TASK_EAGER_PROPAGATES = True
+# Nothing should reach Redis for a task, so point it somewhere that would fail
+# loudly if anything tried.
+CELERY_BROKER_URL = "memory://"
+CELERY_RESULT_BACKEND = "cache+memory://"
+
+PAYOUT_TRANSFER_PROVIDER = "apps.payments.transfers.fake.FakeTransferProvider"

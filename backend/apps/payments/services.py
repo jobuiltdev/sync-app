@@ -271,6 +271,33 @@ def verify_destination(provider: ProviderProfile, account_number: str) -> Payout
         raise BankLookupFailed from exc
 
     destination.mark_verified(account_name=resolved.account_name, reference=resolved.reference)
+
+    # The one moment the account number is in hand, and therefore the only moment
+    # a transfer recipient can be created. The handle it returns is what pays this
+    # provider from now on, which is what lets the number itself go unstored.
+    #
+    # A transfer provider that is unreachable does not undo the bank's
+    # confirmation: the account is real either way, and the handle is issued on
+    # the next confirmation. A payout will refuse until there is one.
+    from apps.payments.transfers.base import (
+        TransferError,
+        TransferRejected,
+        get_transfer_provider,
+    )
+
+    try:
+        handle = get_transfer_provider().ensure_recipient(
+            account_number=account_number,
+            bank_code=destination.bank_code,
+            account_name=resolved.account_name,
+        )
+    except TransferError, TransferRejected:
+        handle = ""
+
+    if handle:
+        destination.provider_reference = handle[:120]
+        destination.save(update_fields=["provider_reference", "updated_at"])
+
     return destination
 
 

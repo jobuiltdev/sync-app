@@ -555,6 +555,194 @@ which need Paystack Transfers and a funded balance. Refunds, chargebacks and the
 `Transaction` model that becomes meaningful alongside them. Saved cards, and the
 `SavedAuthorization` model with them. Escrow as a distinct held balance.
 
+### Running unattended, as implemented in M6B
+
+Everything above works while somebody is holding a phone. M6B is what makes it
+work when nobody is. Five things happened on request until now and simply did not
+happen otherwise: an offer's window passing, a payment nobody came back to
+confirm, a transfer we submitted and never heard about, a challenge nobody used,
+and any inconsistency between the three.
+
+#### The job architecture
+
+**Celery over the Redis that is already here**, which is what section 2 has
+specified since M0. Importing Django starts nothing: a worker and a scheduler are
+separate processes, and `manage.py` behaves exactly as it did.
+
+```
+worker:    celery -A config worker
+scheduler: celery -A config beat
+```
+
+Tasks live in each app's `tasks.py`, beside the domain they act on. Test settings
+run them eagerly, in the calling process, so **the suite needs no worker and no
+broker**: a test calls a task like a function and sees its effect immediately.
+
+`kombu`, Celery's transport library, declares `redis<6.5` while M0 had pinned the
+redis client at 8.1.0. It connects fine on 8.1.0 and was verified doing so, but
+that is untested-there rather than supported, and this project already took the
+other side of exactly that question when it chose Django 5.2 over 6.1. The pin
+moved to 6.4.0, which every maintainer declares and which nothing here needs a
+newer feature than.
+
+#### The contract every task follows
+
+Fetch current state from the database. Lock the contested row. Re-check that the
+work is still needed. Change it in one transaction. Be safe run twice, and safe
+if the process dies at any point, including between an external call and
+recording its result. Most repeat executions end at the third step having done
+nothing, which is exactly right.
+
+#### Three retry classes
+
+The classification is a statement about money rather than about code.
+
+| Class | Meaning | Tasks |
+| --- | --- | --- |
+| **Safe to retry** | Nothing outside changes, or the external call is a read | Offer expiry, challenge retirement, the consistency sweep, both reconciliations |
+| **Requires reconciliation** | An external write whose result we may not have seen | Payout submission |
+| **Never retry** | Repetition moves money twice and cannot be reconciled | Nothing, deliberately |
+
+The third row is empty by design rather than by luck: the one operation that
+would belong in it was made reconcilable so that it could sit in the second.
+
+Safe tasks retry five times with jittered backoff from ten seconds to ten
+minutes, then stop. A task that has failed five times will not succeed on the
+sixth, and an unbounded retry fills a queue with work nobody will look at.
+
+#### Payout execution, and the crash window
+
+This is the one place the system sends money out, and the one place a request we
+made and an answer we did not receive is a question about real naira.
+
+**The window, stated plainly.** We call the provider. They receive it, start a
+transfer, and begin their reply. The connection drops, or the process is killed.
+Money has moved and we have no record of it. From our side that is
+indistinguishable from a request that never arrived.
+
+The system does not try to tell them apart at the moment of failure. Instead:
+
+1. **A reference is reserved before the call.** `transfer_reference` is generated
+   and committed, with the payout moved to `PROCESSING`, in a transaction that
+   finishes before the provider is contacted. The instant it commits, the payout
+   means "this may have moved money".
+2. **A payout carrying a reference is never resubmitted.** Not by a retry, not by
+   an operator, not by reconciliation. `execute_payout` refuses outright, and
+   that refusal is the guarantee, independent of anything a vendor promises.
+3. **Reconciliation asks, using our reference.** Because it was ours and was
+   written first, the question always has somewhere to be asked. This is why the
+   transfer interface requires `fetch(reference)`, and why a provider that cannot
+   answer by our reference cannot be used here.
+
+Paystack also treats a transfer reference as idempotent, so a resubmission would
+return the original. That is a second line of defence and deliberately not the
+first: relying on a vendor's idempotency for the one operation that must never
+happen twice would be trusting a promise we cannot check.
+
+**What each state means**, which is the vocabulary an operator needs:
+
+| Payout state | What is true |
+| --- | --- |
+| `REQUESTED`, no reference | Definitely not sent |
+| `PROCESSING`, reference, no gateway reference | Submitted, outcome unknown |
+| `PROCESSING`, both references | Submitted, provider still working |
+| `PAID` | Definitely successful |
+| `FAILED` | Definitely failed, money available again |
+
+A provider that refuses outright is different again: nothing was started, so the
+payout is failed and its reserved reference cleared, because leaving one would
+make it look forever like a payout that might have moved money.
+
+**No new lifecycle state was invented.** `PROCESSING` plus the presence of a
+reference carries the distinction, which keeps the guarded transition table
+exactly as M5 defined it.
+
+#### Payout reconciliation
+
+For every payout in `PROCESSING` with a reference, ask the provider and apply the
+answer through the same guarded lifecycle. Success pays it, failure fails it and
+returns the money by arithmetic, still-processing leaves it, and **unknown leaves
+it too**. That last one matters: a provider with no record of our reference today
+may simply not have processed it yet, and releasing the money on that basis is
+how it goes out twice. Terminal states are never revisited, so a late answer
+cannot drag a `PAID` payout back.
+
+#### Payment reconciliation
+
+For payments left `INITIALIZED` longer than fifteen minutes, ask the gateway.
+**Age is never evidence.** A payment pending for a week is one we have not
+resolved, which is a different thing from one that failed, and an unknown
+provider state never becomes `SUCCESSFUL`. A provider that cannot be reached
+changes nothing at all. After seven days a payment stops being swept and is
+recorded as needing a person, because asking an eighth time will not help and
+sweeping it forever buries the ones that are still answerable.
+
+#### Offer expiry
+
+Offers past their window are closed through the existing guarded lifecycle, and a
+booking with no answerable offer left moves `MATCHING -> EXPIRED`, which the
+lifecycle has defined since M3 for a request nobody took. The history row records
+which task did it. Nothing new was invented; the state simply became reachable
+without somebody opening the app.
+
+#### Anomalies, and what may be repaired
+
+The consistency sweep reads our own rows and classifies what it finds. **Only one
+kind is repaired automatically**: a booking that is completed and paid with no
+settlement, where the invariant and the intended outcome are both unambiguous and
+the code to produce it already exists.
+
+Everything else is recorded in `FinancialAnomaly` for a person. A settlement with
+no payment behind it is not deleted, because that would take a provider's
+earnings away on the say-so of a sweep. A settlement whose amount disagrees with
+its booking is not rewritten, because that is exactly what immutability forbids
+and because the disagreement is the only evidence of whatever caused it. Open
+anomalies deduplicate per subject, so an hourly sweep against an unfixed problem
+produces one row with a count rather than one row an hour.
+
+#### Webhooks stayed synchronous
+
+M6A's webhook handler was reviewed and left alone. It verifies a signature,
+writes a deduplication row, locks one payment and applies one answer: a handful
+of indexed queries with no external call, which is already fast and already
+idempotent. Handing that to a queue would add a delivery guarantee to something
+that has one, and would introduce a window where we have acknowledged an event we
+have not yet applied. Complexity for its own sake was declined.
+
+#### Automatic payouts were not built
+
+A provider still asks. What M6B adds is the execution of what they asked for,
+released by an operator action in the admin that queues the same task any other
+caller would use. Nothing pays anybody because earnings became available.
+Removing the operator gate later is one call site, and is a business decision
+rather than an engineering one.
+
+#### Balance under all of this
+
+Unchanged from M5, which is the point. There is still no stored balance:
+available is summed from settlements minus live reservations and outflows on
+every read. Execution reserves nothing new, because `PROCESSING` already
+reserved. What execution adds is a recheck: the amount is recalculated from the
+immutable records before the transfer is submitted, so a payout requested when
+the money was there does not go out once it is not. Verified with real threads
+that two workers sending one payout submit one transfer, and that requesting
+while another payout executes cannot drive the balance negative.
+
+#### Scheduling
+
+| Task | Interval | Why |
+| --- | --- | --- |
+| Offer expiry | 60s | Offers run on a fifteen minute window; a minute of lag costs nobody anything |
+| Payment reconciliation | 5m | Talks to Paystack. Far more often than a slow bank transfer needs |
+| Payout reconciliation | 5m | The task that closes the crash window |
+| Challenge retirement | 1h | Tidies rows that are already unusable |
+| Consistency sweep | 1h | Reads our own rows; the slowest query of the five |
+
+Every interval and every batch size is an environment variable. Batches are
+bounded at two hundred rows, so a bad day cannot produce a task that holds locks
+for minutes, and whatever is left is picked up on the next tick. Several workers
+running the same schedule is safe and is tested.
+
 ### How verticals stay modular
 
 This is the load-bearing idea. The `Booking` model never learns the vocabulary of
@@ -1017,6 +1205,15 @@ Built in M6A:
 - **PayoutDestination** gains `verification_status`, `resolved_account_name`,
   `verified_at`, `verification_reference`
 
+Built in M6B:
+
+- **PayoutRequest** gains `transfer_reference` (ours, reserved before the call),
+  `transfer_provider`, `gateway_reference`, `gateway_status`, `submitted_at`,
+  `reconciled_at`
+- **FinancialAnomaly**: `kind`, `classification`, `subject_type`, `subject_id`,
+  `subject_reference`, `detail`, `first_seen_at`, `last_seen_at`, `times_seen`,
+  `resolved_at`, `resolution`. One open row per problem
+
 Still deferred:
 
 - **Transaction** and **SavedAuthorization**, which become meaningful alongside
@@ -1307,12 +1504,18 @@ fix it. That is the point of doing M3 on a single vertical.
    `CREATE_BOOKING` at phone, `ACCEPT_JOB` and `REQUEST_PAYOUT` at phone plus
    email.
 
-0b. **Money comes in but does not go out.** M6A closed half of this: a customer
-   can be charged, and a settlement now waits for that payment. The other half is
-   open. A payout still ends with an operator moving money by hand from the admin,
-   because transfer execution needs Paystack Transfers, a funded balance and the
-   webhook path for its results. Until that exists a provider can be paid, but
-   only by a person.
+0b. **Money moves in both directions, on fake providers.** M6A took payment in;
+   M6B sends it out, through a transfer abstraction with a Paystack adapter
+   behind it and a reconciliation path for a submission whose outcome was never
+   received. What is missing is the account: `PAYOUT_TRANSFER_PROVIDER` defaults
+   to the fake, which submits nothing. Switching it on needs Paystack Transfers
+   enabled, a funded balance, and a first payout watched by a person.
+
+0c. **Nothing runs the workers yet.** The tasks, the schedule and the retry
+   policy all exist and are tested, but a deployment has to actually start
+   `celery -A config worker` and one `celery -A config beat`. Until it does, the
+   system behaves exactly as it did at the end of M6A: correct while somebody is
+   holding a phone, and inert otherwise.
 
 1. **Local infrastructure.** Docker Compose is the chosen approach and the file is in
    the repository, but Docker Desktop must be installed on each development machine.
@@ -1348,6 +1551,8 @@ fix it. That is the point of doing M3 on a single vertical.
 | Forged payment webhook | A fake success event would pay a provider for nothing | HMAC over the raw body, then amount and currency checked against our own record |
 | Duplicate charge | A retried tap over a bad connection charges twice | Idempotency key, booking row locked, one successful intent per booking enforced by index |
 | Wrong bank account | One mistyped digit sends money to a stranger | The account is resolved with the bank and the returned name shown before any payout |
+| Duplicate transfer | A retry after a timeout pays a provider twice | Our reference is reserved before the call, a payout carrying one is never resubmitted, and reconciliation establishes what happened |
+| Silent inconsistency | Money owed to nobody, or owed twice, noticed months later | An hourly sweep classifies anomalies and repairs only the unambiguous |
 | Payout double-spend | Two devices requesting the same balance pays it out twice | Provider row locked, one live payout per provider enforced by a partial unique index, balance derived not stored |
 | Payout destination exposure | A stored bank account number is a standing liability | Only a hash and the last four digits persist. The full number is never a field |
 | Home entry safety | A stranger in a customer's home. One incident is existential | Approval gates job access, identity shown before arrival, disputes |

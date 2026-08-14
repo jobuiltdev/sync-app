@@ -5,6 +5,7 @@ imports to find them. Same arrangement as `bookings`, where the offer lives besi
 its lifecycle rather than in one long models file.
 """
 
+from apps.payments.anomalies import AnomalyClass, AnomalyKind, FinancialAnomaly
 from apps.payments.destinations import DestinationStatus, PayoutDestination
 from apps.payments.intents import PaymentIntent, PaymentStatus
 from apps.payments.money import Currency
@@ -13,9 +14,12 @@ from apps.payments.settlements import BookingSettlement, SettlementStatus
 from apps.payments.webhooks import WebhookEvent
 
 __all__ = [
+    "AnomalyClass",
+    "AnomalyKind",
     "BookingSettlement",
     "Currency",
     "DestinationStatus",
+    "FinancialAnomaly",
     "PaymentIntent",
     "PaymentStatus",
     "PayoutDestination",

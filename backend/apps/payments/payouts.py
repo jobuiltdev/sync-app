@@ -7,6 +7,8 @@ time is blunt. A provider must be able to ask to be paid and to change their min
 and must never be able to record that they were paid.
 """
 
+import secrets
+
 from django.db import models
 
 # The booking lifecycle already names the four kinds of actor in this system, and
@@ -15,6 +17,21 @@ from django.db import models
 from apps.bookings.state import ActorType
 from apps.common.models import BaseModel
 from apps.payments.money import Currency
+
+#: Same alphabet the booking and payment references use, for the same reason.
+REFERENCE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+REFERENCE_LENGTH = 10
+
+
+def generate_transfer_reference() -> str:
+    """Our own handle on one transfer submission.
+
+    Chosen and stored **before** the provider is called, which is the whole
+    mechanism by which an unanswered submission stays recoverable. Without a
+    reference of our own there is no question we could later ask that would
+    identify the transfer we may or may not have started.
+    """
+    return "SYT-" + "".join(secrets.choice(REFERENCE_ALPHABET) for _ in range(REFERENCE_LENGTH))
 
 
 class PayoutStatus(models.TextChoices):
@@ -109,6 +126,23 @@ class PayoutRequest(BaseModel):
     #: twice is one payout asked for twice over a bad connection.
     idempotency_key = models.CharField(max_length=100, blank=True)
 
+    # --- transfer submission -----------------------------------------------
+    #: Our reference for the transfer, written before the provider is called.
+    #: Its presence is what distinguishes "never submitted" from "submitted,
+    #: outcome unknown", and a payout that has one is never resubmitted: it is
+    #: reconciled instead. Blank until execution begins.
+    transfer_reference = models.CharField(max_length=20, blank=True)
+    #: Which provider was asked to move the money.
+    transfer_provider = models.CharField(max_length=20, blank=True)
+    #: The provider's own handle, learned only if we received their answer. Its
+    #: absence alongside a set transfer_reference is precisely the crash window.
+    gateway_reference = models.CharField(max_length=120, blank=True)
+    #: The provider's own word for the outcome, for support conversations.
+    gateway_status = models.CharField(max_length=40, blank=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    #: When reconciliation last asked the provider about this transfer.
+    reconciled_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         db_table = "payments_payout_request"
         ordering = ["-created_at"]
@@ -134,6 +168,25 @@ class PayoutRequest(BaseModel):
                 fields=["provider", "idempotency_key"],
                 condition=~models.Q(idempotency_key=""),
                 name="payments_payout_unique_idempotency_key",
+            ),
+            # One transfer reference belongs to one payout. If two payouts ever
+            # carried the same one, reconciliation could not tell which of them
+            # a provider's answer was about.
+            models.UniqueConstraint(
+                fields=["transfer_reference"],
+                condition=~models.Q(transfer_reference=""),
+                name="payments_payout_unique_transfer_reference",
+            ),
+            # A payout that has been submitted says when, and one that has not
+            # cannot claim to have been. This is the invariant the whole
+            # crash-window design rests on, so the database holds it rather than
+            # the code that writes it.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(transfer_reference="", submitted_at__isnull=True)
+                    | (~models.Q(transfer_reference="") & models.Q(submitted_at__isnull=False))
+                ),
+                name="payments_payout_submitted_at_matches_reference",
             ),
             # A resolved payout says when it was resolved, and an unresolved one
             # cannot claim to have been.
@@ -167,3 +220,19 @@ class PayoutRequest(BaseModel):
     def is_cancellable(self) -> bool:
         """Whether the provider could still call this off themselves."""
         return self.status == PayoutStatus.REQUESTED
+
+    @property
+    def is_submitted(self) -> bool:
+        """Whether a transfer may have been started for this payout.
+
+        True the moment a reference is reserved, before the provider is called
+        rather than after. Read it as "this might have moved money": that is the
+        assumption that makes resubmission unthinkable and reconciliation the
+        only correct next step.
+        """
+        return bool(self.transfer_reference)
+
+    @property
+    def needs_reconciliation(self) -> bool:
+        """Submitted, and we still do not know what happened."""
+        return self.is_submitted and not self.is_terminal

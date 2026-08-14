@@ -22,3 +22,9 @@ SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 CSRF_TRUSTED_ORIGINS = env.list("DJANGO_CSRF_TRUSTED_ORIGINS", default=[])
 X_FRAME_OPTIONS = "DENY"
+
+# Payout execution moves real money to real people. A deployment that has not
+# been given a transfer provider must not start and quietly leave every payout
+# sitting in REQUESTED, so this is read without a fallback.
+PAYOUT_TRANSFER_PROVIDER = env("PAYOUT_TRANSFER_PROVIDER")
+CELERY_BROKER_URL = env("CELERY_BROKER_URL")

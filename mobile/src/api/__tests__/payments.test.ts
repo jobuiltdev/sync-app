@@ -228,7 +228,7 @@ describe('payments api', () => {
 describe('payoutStatusLabel', () => {
   it('says where the money is, in the provider terms', () => {
     expect(payoutStatusLabel('REQUESTED')).toBe('Requested');
-    expect(payoutStatusLabel('PROCESSING')).toBe('On its way');
+    expect(payoutStatusLabel('PROCESSING')).toBe('On its way to your bank');
     expect(payoutStatusLabel('PAID')).toBe('Paid');
   });
 

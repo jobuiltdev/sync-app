@@ -152,8 +152,22 @@ class PayoutDestinationRequirementTests(TestCase):
 
         updated = make_destination(self.provider, account_number="0000000001")
 
-        self.assertEqual(updated.provider_reference, "")
+        # The old account's handle must not carry over to a different account.
+        # From M6B confirming the new one issues a handle of its own, so what
+        # matters is that it is not the old one rather than that there is none.
+        self.assertNotEqual(updated.provider_reference, "RCP_oldaccount")
         self.assertEqual(updated.account_number_last4, "0001")
+
+    def test_saving_an_account_without_confirming_it_leaves_no_transfer_token(self):
+        destination = make_destination(self.provider)
+        destination.provider_reference = "RCP_oldaccount"
+        destination.save(update_fields=["provider_reference"])
+
+        updated = make_destination(self.provider, verified=False, account_number="0000000001")
+
+        # A handle is issued only when a bank confirms the account, so an
+        # unconfirmed one has none and cannot be paid to.
+        self.assertEqual(updated.provider_reference, "")
 
     def test_updating_the_destination_does_not_create_a_second_one(self):
         make_destination(self.provider)
