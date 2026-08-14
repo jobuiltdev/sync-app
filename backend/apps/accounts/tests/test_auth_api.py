@@ -8,6 +8,9 @@ from apps.accounts.models import User
 PASSWORD = "Lagos-Rider-2026"
 
 REGISTER_URL = "/api/v1/auth/register/"
+#: Registration requires a number, so most payloads here carry the same one. Tests
+#: that create a second account use a different one, since phone is unique.
+PHONE = "0803 123 4567"
 LOGIN_URL = "/api/v1/auth/login/"
 REFRESH_URL = "/api/v1/auth/refresh/"
 LOGOUT_URL = "/api/v1/auth/logout/"
@@ -22,7 +25,12 @@ class RegistrationTests(APITestCase):
     def test_creates_an_account_and_returns_a_session(self):
         response = self.client.post(
             REGISTER_URL,
-            {"email": "ada@example.com", "password": PASSWORD, "first_name": "Ada"},
+            {
+                "email": "ada@example.com",
+                "password": PASSWORD,
+                "first_name": "Ada",
+                "phone": "0803 123 4567",
+            },
             format="json",
         )
 
@@ -34,7 +42,9 @@ class RegistrationTests(APITestCase):
 
     def test_never_returns_the_password(self):
         response = self.client.post(
-            REGISTER_URL, {"email": "ada@example.com", "password": PASSWORD}, format="json"
+            REGISTER_URL,
+            {"email": "ada@example.com", "password": PASSWORD, "phone": PHONE},
+            format="json",
         )
 
         self.assertNotIn("password", response.data["user"])
@@ -42,7 +52,9 @@ class RegistrationTests(APITestCase):
 
     def test_normalises_the_email_before_storing_it(self):
         response = self.client.post(
-            REGISTER_URL, {"email": "  Ada@Example.COM  ", "password": PASSWORD}, format="json"
+            REGISTER_URL,
+            {"email": "  Ada@Example.COM  ", "password": PASSWORD, "phone": PHONE},
+            format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -57,17 +69,47 @@ class RegistrationTests(APITestCase):
 
         self.assertEqual(response.data["user"]["phone"], "+2348031234567")
 
-    def test_registers_without_a_phone(self):
+    def test_refuses_to_register_without_a_phone(self):
+        # A number is required at signup, although verifying it is not. Booking
+        # needs a verified phone, and an account with no number on file cannot
+        # even start that: it is a form away rather than a code away.
         response = self.client.post(
             REGISTER_URL, {"email": "ada@example.com", "password": PASSWORD}, format="json"
         )
 
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertIsNone(response.data["user"]["phone"])
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("phone", response.data["error"]["details"]["fields"])
+        self.assertFalse(User.objects.filter(email="ada@example.com").exists())
+
+    def test_refuses_a_blank_phone(self):
+        response = self.client.post(
+            REGISTER_URL,
+            {"email": "ada@example.com", "password": PASSWORD, "phone": "   "},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("phone", response.data["error"]["details"]["fields"])
+
+    def test_the_number_given_at_signup_is_not_verified_by_giving_it(self):
+        # Requiring a number is not the same as proving it. The booking gate still
+        # demands a code, which is what stops signup being a way to claim somebody
+        # else's number.
+        response = self.client.post(
+            REGISTER_URL,
+            {"email": "ada@example.com", "password": PASSWORD, "phone": PHONE},
+            format="json",
+        )
+
+        self.assertEqual(response.data["user"]["phone"], "+2348031234567")
+        self.assertFalse(response.data["user"]["is_phone_verified"])
+        self.assertIsNone(response.data["user"]["phone_verified_at"])
 
     def test_the_new_account_starts_unverified(self):
         response = self.client.post(
-            REGISTER_URL, {"email": "ada@example.com", "password": PASSWORD}, format="json"
+            REGISTER_URL,
+            {"email": "ada@example.com", "password": PASSWORD, "phone": PHONE},
+            format="json",
         )
 
         self.assertFalse(response.data["user"]["is_email_verified"])
@@ -77,7 +119,9 @@ class RegistrationTests(APITestCase):
         make_user("ada@example.com")
 
         response = self.client.post(
-            REGISTER_URL, {"email": "ADA@Example.com", "password": PASSWORD}, format="json"
+            REGISTER_URL,
+            {"email": "ADA@Example.com", "password": PASSWORD, "phone": PHONE},
+            format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -108,7 +152,9 @@ class RegistrationTests(APITestCase):
 
     def test_rejects_a_short_password(self):
         response = self.client.post(
-            REGISTER_URL, {"email": "ada@example.com", "password": "short1"}, format="json"
+            REGISTER_URL,
+            {"email": "ada@example.com", "password": "short1", "phone": PHONE},
+            format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -116,7 +162,9 @@ class RegistrationTests(APITestCase):
 
     def test_rejects_a_common_password(self):
         response = self.client.post(
-            REGISTER_URL, {"email": "ada@example.com", "password": "password123"}, format="json"
+            REGISTER_URL,
+            {"email": "ada@example.com", "password": "password123", "phone": PHONE},
+            format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -124,7 +172,9 @@ class RegistrationTests(APITestCase):
 
     def test_rejects_an_entirely_numeric_password(self):
         response = self.client.post(
-            REGISTER_URL, {"email": "ada@example.com", "password": "84726194037"}, format="json"
+            REGISTER_URL,
+            {"email": "ada@example.com", "password": "84726194037", "phone": PHONE},
+            format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -133,7 +183,7 @@ class RegistrationTests(APITestCase):
     def test_rejects_a_password_that_looks_like_the_email(self):
         response = self.client.post(
             REGISTER_URL,
-            {"email": "adaokeke@example.com", "password": "adaokeke@example"},
+            {"email": "adaokeke@example.com", "password": "adaokeke@example", "phone": PHONE},
             format="json",
         )
 
@@ -142,7 +192,9 @@ class RegistrationTests(APITestCase):
 
     def test_rejects_a_malformed_email(self):
         response = self.client.post(
-            REGISTER_URL, {"email": "not-an-email", "password": PASSWORD}, format="json"
+            REGISTER_URL,
+            {"email": "not-an-email", "password": PASSWORD, "phone": PHONE},
+            format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

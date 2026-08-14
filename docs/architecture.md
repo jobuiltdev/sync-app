@@ -458,6 +458,27 @@ legitimate: browse services, browse providers, read service information, explore
 the app, manage permitted profile fields. Verification is demanded only where it
 matters.
 
+### What registration asks for
+
+Email, password and **a phone number, required**. Booking needs a verified phone,
+and an account with no number on file cannot begin that: it is a form away rather
+than a code away. Support also has no way to reach the person behind such an
+account, which matters from the moment one exists rather than from the first
+booking.
+
+**Requiring the number is not requiring it verified.** The account is created with
+`phone_verified_at` unset, and the booking gate still demands a code, which is what
+stops signup being a way to claim somebody else's number.
+
+**The column stays nullable, and no migration was needed**, for three independent
+reasons. Google sign-in creates an account from an ID token carrying no phone
+number, so the model has to be able to hold one without. `phone` is unique, and in
+PostgreSQL nulls do not collide under a unique index while a placeholder would, so
+NOT NULL plus unique would mean every account needs a real distinct number
+including ones created by `createsuperuser`. And requiring a number is a rule about
+one form rather than about the shape of a user, so it belongs in the registration
+serializer, which is where it is enforced.
+
 ### Progressive verification, not a wall
 
 Registration ends with "Your account is ready", not a queue of screens. The account
@@ -758,7 +779,8 @@ noted as append-only.
 ### accounts
 
 - **User**: `email` (unique, case-insensitive, USERNAME_FIELD), `password` (may be
-  unusable), `phone` (E.164, unique when set, nullable), `first_name`, `last_name`,
+  unusable), `phone` (E.164, unique when set, nullable at the database level and
+  required by the registration form), `first_name`, `last_name`,
   `email_verified_at`, `phone_verified_at`, `is_active`, `is_staff`, `last_active_at`
 - **SocialAccount**: `user`, `provider` (GOOGLE), `provider_account_id`,
   `provider_email`, unique on (provider, provider_account_id)

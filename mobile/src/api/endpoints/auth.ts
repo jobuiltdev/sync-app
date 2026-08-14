@@ -29,7 +29,9 @@ export interface RegistrationInput {
   password: string;
   first_name?: string;
   last_name?: string;
-  phone?: string;
+  /** Required at signup. `AuthUser.phone` stays nullable because an account
+   *  created through Google arrives from an ID token that carries no number. */
+  phone: string;
 }
 
 export interface LoginInput {

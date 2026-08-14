@@ -3,30 +3,19 @@ import { Link } from 'expo-router';
 import { Controller, useForm } from 'react-hook-form';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { z } from 'zod';
 
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { toFormErrors } from '@/features/auth/form-errors';
 import { useRegister } from '@/features/auth/hooks';
+import { type RegisterFormValues, registerSchema } from '@/features/auth/register-schema';
 import { colors, fontSizes, fontWeights, radii, spacing } from '@/theme/tokens';
 
-// Only shape is checked here. Password strength and uniqueness are the server's
-// rules, and duplicating them would mean two places to keep in step.
-const schema = z.object({
-  first_name: z.string().trim().min(1, 'Enter your first name.'),
-  last_name: z.string().trim().min(1, 'Enter your last name.'),
-  email: z.email('Enter a valid email address.'),
-  phone: z.string().trim().optional(),
-  password: z.string().min(1, 'Choose a password.'),
-});
-
-type FormValues = z.infer<typeof schema>;
 
 export default function RegisterScreen() {
   const { mutate, isPending, error } = useRegister();
-  const { control, handleSubmit } = useForm<FormValues>({
-    resolver: zodResolver(schema),
+  const { control, handleSubmit } = useForm<RegisterFormValues>({
+    resolver: zodResolver(registerSchema),
     defaultValues: { first_name: '', last_name: '', email: '', phone: '', password: '' },
   });
 
@@ -109,7 +98,7 @@ export default function RegisterScreen() {
               name="phone"
               render={({ field, fieldState }) => (
                 <Field
-                  label="Phone (optional)"
+                  label="Phone"
                   value={field.value}
                   onChangeText={field.onChange}
                   onBlur={field.onBlur}
@@ -142,9 +131,7 @@ export default function RegisterScreen() {
             <Button
               label="Create account"
               loading={isPending}
-              onPress={handleSubmit((values) =>
-                mutate({ ...values, phone: values.phone?.trim() || undefined }),
-              )}
+              onPress={handleSubmit((values) => mutate({ ...values, phone: values.phone.trim() }))}
             />
           </View>
 

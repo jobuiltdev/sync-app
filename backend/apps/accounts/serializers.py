@@ -52,11 +52,25 @@ class AuthenticatedUserSerializer(serializers.Serializer):
 
 
 class RegistrationSerializer(serializers.Serializer):
+    """What it takes to open an account with an email address and a password.
+
+    A phone number is required here, and only here. `User.phone` stays nullable
+    because a Google sign-in creates an account from an ID token that carries no
+    number, so the model must be able to hold an account without one. Requiring it
+    is a rule about this form, not about the shape of a user.
+
+    Requiring the number is not the same as requiring it verified. Verification
+    stays progressive and is still demanded only at the first action that needs
+    it. What this buys is that every account created this way has a number on
+    file, so booking is one code away rather than a form away, and support has a
+    way to reach the person behind an account from the moment it exists.
+    """
+
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True, style={"input_type": "password"})
     first_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
     last_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
-    phone = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    phone = serializers.CharField(max_length=20)
 
     def validate_email(self, value: str) -> str:
         email = normalize_email(value)
@@ -64,9 +78,7 @@ class RegistrationSerializer(serializers.Serializer):
             raise serializers.ValidationError("An account with this email already exists.")
         return email
 
-    def validate_phone(self, value: str) -> str | None:
-        if not value.strip():
-            return None
+    def validate_phone(self, value: str) -> str:
         try:
             phone = normalize_phone(value)
         except DjangoValidationError as exc:
