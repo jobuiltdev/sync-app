@@ -296,21 +296,24 @@ email or bank transfer has been made by this system.
 **CI has never successfully started.** Every run since M0 ends in
 `startup_failure` with zero jobs, and this is not a claim that CI passes.
 
-The evidence, as of commit `f2d536d`:
+The evidence, as of commit `a4b09a2`:
 
 | Observation | Value |
 | --- | --- |
-| Latest run | `31839824778`, conclusion `startup_failure`, 0 jobs |
-| Manual dispatch | `31844192696`, resolved `.github/workflows/backend.yml`, ran 1 second, 0 jobs |
-| Workflow YAML | Parses locally; both workflows registered and `active` |
+| Push run | `31850016751`, `startup_failure`, 0 jobs |
+| Manual dispatch of `backend` | `31844192696`, resolved `.github/workflows/backend.yml`, 1 second, 0 jobs |
+| Manual dispatch of `ci-smoke` | `31850076408`, `startup_failure`, 1 second, 0 jobs |
+| Workflow YAML | Parses locally; all three workflows registered and `active` |
 | Actions | `enabled: true`, `allowed_actions: all` |
 | Run annotations | None available (`404`) |
 
-A `workflow_dispatch` run is the useful part: GitHub resolved the workflow path
-correctly and still started no job, which rules out the trigger and the file
-contents. `.github/workflows/ci-smoke.yml` exists to narrow it further, being a
-single `echo` with no checkout and no services; if that also fails to start, no
-workflow in this repository can, and the cause is outside it.
+The last row of evidence is the decisive one. `.github/workflows/ci-smoke.yml` is
+a single `echo`: no checkout, no services, no dependencies, nothing that could be
+wrong with it. It fails at startup in one second with zero jobs, exactly like the
+others, and GitHub resolved its path correctly before doing so.
+
+**No workflow in this repository can start a job, whatever it contains.** That
+rules out the YAML, the triggers, the services and the application entirely.
 
 What to check outside the repository: the account's Actions billing and spending
 limit, whether the account is in good standing, and whether any organisation or
