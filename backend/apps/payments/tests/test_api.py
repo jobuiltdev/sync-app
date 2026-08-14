@@ -213,8 +213,24 @@ class PayoutDestinationEndpointTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
         self.assertEqual(error_code(response), "INVALID_PAYOUT_DESTINATION")
 
-    def test_setting_an_account_unblocks_the_payout(self):
+    def test_setting_an_account_is_not_enough_on_its_own(self):
+        # Ten digits somebody typed is not a confirmed account. From M6A a payout
+        # needs the bank to have said the account exists.
         self.client.put(DESTINATION, self.payload(), format="json")
+
+        response = self.client.post(REQUEST_PAYOUT, {"amount_kobo": 100_000}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        self.assertEqual(error_code(response), "PAYOUT_DESTINATION_NOT_VERIFIED")
+
+    def test_confirming_the_account_unblocks_the_payout(self):
+        from apps.payments.banks.fake import FakeBankResolver
+
+        self.client.put(DESTINATION, self.payload(), format="json")
+        FakeBankResolver.arrange(
+            account_number="0123456789", bank_code="058", account_name="Adaeze Okonkwo"
+        )
+        self.client.post(f"{DESTINATION}verify/", {"account_number": "0123456789"}, format="json")
 
         response = self.client.post(REQUEST_PAYOUT, {"amount_kobo": 100_000}, format="json")
 

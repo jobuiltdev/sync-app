@@ -30,6 +30,8 @@ from apps.accounts import policy
 from apps.bookings.state import ActorType, BookingStatus
 from apps.payments.destinations import PayoutDestination
 from apps.payments.errors import (
+    BankLookupFailed,
+    DestinationNotVerified,
     InsufficientBalance,
     InvalidPayoutAmount,
     InvalidPayoutDestination,
@@ -69,18 +71,48 @@ def commission_rate_bps() -> int:
 # --- settlement ------------------------------------------------------------
 
 
-def create_settlement(booking: Booking) -> BookingSettlement:
-    """Records what a completed booking earned, exactly once.
+def is_paid(booking: Booking) -> bool:
+    """Whether a customer's money has actually arrived for this booking."""
+    from apps.payments.intents import PaymentIntent, PaymentStatus
 
-    Called as a booking reaches COMPLETED. Safe to call again with the same
-    booking from anywhere, by any number of concurrent callers: the booking row is
-    locked so the racers serialise, and the one-to-one constraint is the final word
-    if they somehow do not.
+    return PaymentIntent.objects.filter(booking=booking, status=PaymentStatus.SUCCESSFUL).exists()
+
+
+def settle_if_ready(booking: Booking) -> BookingSettlement | None:
+    """Writes the settlement if both conditions for one now hold.
+
+    A booking earns its provider money when the work is finished **and** the
+    customer has paid. Either can happen first: a customer may pay up front and
+    confirm days later, or pay after the job is done. Whichever happens second
+    calls this, and it is the one that writes the settlement.
+
+    Returns None when the other condition is still outstanding, which is an
+    ordinary state and not a failure. `create_settlement` is the strict version
+    that says why.
+    """
+    try:
+        return create_settlement(booking)
+    except SettlementUnavailable:
+        return None
+
+
+def create_settlement(booking: Booking) -> BookingSettlement:
+    """Records what a completed and paid booking earned, exactly once.
+
+    Safe to call again with the same booking from anywhere, by any number of
+    concurrent callers: the booking row is locked so the racers serialise, and the
+    one-to-one constraint is the final word if they somehow do not.
 
     The amount comes from the booking's own agreed total, which was fixed when the
     customer requested the job. Nothing here reads a Service or a ProviderService
     price, which is what makes a later price change unable to reach backwards into
     money that has already been earned.
+
+    **A completed booking that has not been paid for earns nothing.** M5 settled
+    on completion alone, because no payment existed to wait for; M6A adds the
+    money, and provider earnings that a customer never funded would be a debt the
+    marketplace has no way to cover. The settlement is written by whichever of
+    completion and payment happens second.
     """
     from apps.bookings.models import Booking
 
@@ -101,6 +133,11 @@ def create_settlement(booking: Booking) -> BookingSettlement:
             # arrived at through an accepted offer. Refused explicitly anyway,
             # because a settlement with nobody to pay is not a thing to guess at.
             raise SettlementUnavailable
+        if not is_paid(locked):
+            raise SettlementUnavailable(
+                "This booking has not been paid for yet, so there is nothing to settle.",
+                code="SETTLEMENT_AWAITING_PAYMENT",
+            )
 
         split = split_commission(locked.total_kobo, commission_rate_bps())
 
@@ -189,10 +226,51 @@ def available_balance(provider: ProviderProfile) -> Earnings:
 
 
 def usable_destination(provider: ProviderProfile) -> PayoutDestination:
-    """The account this provider may be paid into, or a refusal saying so."""
+    """The account this provider may be paid into, or a refusal saying so.
+
+    An unverified account is refused separately from a missing one, because they
+    need different things from the provider: one needs an account added, the other
+    needs the one on file confirmed with the bank.
+    """
     destination = PayoutDestination.objects.filter(provider=provider).first()
-    if destination is None or not destination.is_usable:
+    if destination is None or not destination.is_active or not destination.account_number_hash:
         raise InvalidPayoutDestination
+    if not destination.is_verified:
+        raise DestinationNotVerified
+    return destination
+
+
+def verify_destination(provider: ProviderProfile, account_number: str) -> PayoutDestination:
+    """Asks the bank whether this account exists, and records the answer.
+
+    The account number is supplied again rather than read from the row, because
+    the row does not hold it: only a hash and the last four digits persist. That
+    is also the check that the number being resolved is the one on file, since a
+    number that does not match the hash is not this destination's account.
+
+    A lookup failure leaves the destination unverified rather than marking it
+    failed, so a bank outage does not look to the provider like a wrong account
+    number that they then go and 'fix'.
+    """
+    from apps.payments.banks.base import BankLookupError, get_bank_resolver
+
+    destination = PayoutDestination.objects.filter(provider=provider).first()
+    if destination is None or not destination.is_active:
+        raise InvalidPayoutDestination
+
+    if not destination.matches(account_number):
+        raise InvalidPayoutDestination(
+            "That is not the account number on file. Save the account again first."
+        )
+
+    try:
+        resolved = get_bank_resolver().resolve(
+            account_number=account_number, bank_code=destination.bank_code
+        )
+    except BankLookupError as exc:
+        raise BankLookupFailed from exc
+
+    destination.mark_verified(account_name=resolved.account_name, reference=resolved.reference)
     return destination
 
 
@@ -221,6 +299,11 @@ def set_destination(
     destination.account_name = account_name
     destination.is_active = True
     destination.set_account_number(account_number)
+    # A verification is a statement about one number at one bank. Saving a
+    # different account, or the same account at a different bank, says nothing
+    # about the new pair, so the previous confirmation is discarded rather than
+    # carried over.
+    destination.mark_unverified()
     # Whatever token a transfer provider had issued was issued against the old
     # account, so it does not describe this one.
     destination.provider_reference = ""

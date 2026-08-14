@@ -383,12 +383,177 @@ a Nigerian provider.
 
 #### Still deferred after M5
 
-Charging the customer at all, which is the largest single gap: no gateway, no
-payment intent, no escrow, and therefore no money actually entering the system.
-Transfer execution and webhooks, refunds and chargebacks, cash bookings and the
-ledger that inverts commission for them, cancellation fees, disputes reversing a
-settlement, background expiry of stale payouts, per-category commission, and
-accounting exports.
+Charging the customer at all, which was the largest single gap and is what M6A
+closes. Transfer execution and payout webhooks, refunds and chargebacks, cash
+bookings and the ledger that inverts commission for them, cancellation fees,
+disputes reversing a settlement, background expiry of stale payouts, per-category
+commission, and accounting exports.
+
+### External integrations, as implemented in M6A
+
+M6A makes the outside world real. Five boundaries, all the same shape: an
+interface the domain depends on, one module per vendor that knows what that
+vendor's API looks like, a deterministic fake, and a setting that chooses. No
+domain module imports a vendor, mentions one, or knows the shape of its payloads.
+
+| Concern | Interface | Production adapter | Local and test default |
+| --- | --- | --- | --- |
+| Taking payment | `payments/gateways/base.PaymentGateway` | `gateways/paystack.py` | `gateways/fake.py` |
+| Confirming a bank account | `payments/banks/base.BankAccountResolver` | `banks/paystack.py` | `banks/fake.py` |
+| SMS | `accounts/sms/base.SMSProvider` | `sms/termii.py` | `sms/console.py`, `sms/locmem.py` |
+| Email | Django's `EMAIL_BACKEND` | `accounts/email/resend.py` | Django's console backend |
+| Webhooks | `payments/webhooks.WebhookEvent` | one route per provider | signed locally by the fake |
+
+**The suite needs no external account.** Test settings pin every integration to a
+fake and blank the real keys, so a test that would only pass by reaching a live
+provider fails instead. Importing Django opens no connection: every adapter is
+built on use, never at import.
+
+**Credentials come only from the environment**, are listed in `.env.example`, and
+have no defaults. A production adapter constructed without its key raises
+immediately rather than at the first payment, so a misconfigured deployment is
+obvious before it can swallow anything.
+
+**Why Resend for email.** Section 2 left this open between Resend and AWS SES.
+Resend needs an API key and a verified domain; SES needs an AWS account, an IAM
+user, a sandbox exit request a human reviews, and a region decision. For a
+product that has not launched the setup cost is the whole difference, and SES's
+advantage is per-message price at a volume nobody here has yet. Moving to SES is
+a different `EMAIL_BACKEND` and no other change, which is what the boundary is
+for. Termii for SMS was already the documented intention and is unchanged.
+
+#### Payment lifecycle
+
+`PaymentIntent`, the name section 6 already gave this. An attempt to collect,
+which is not the same thing as a payment.
+
+```
+INITIALIZED -> SUCCESSFUL     the provider says the money moved
+            -> FAILED         the provider says it did not
+```
+
+**Nothing a client sends can make one successful.** There are exactly two writers
+of that status: verification, which fetches the provider's own account of the
+transaction, and a signature-checked webhook. Both run the same function, and it
+refuses unless the amount and currency match what we recorded. A request body
+containing a success claim is not read at all, and there is no PATCH or PUT on a
+payment by any route.
+
+**The amount is the booking's snapshotted total.** Nothing in the payment path
+reads a Service or a ProviderService, so a price change between booking and
+payment cannot alter what a customer is charged.
+
+**A booking is paid for once**, enforced by a partial unique index permitting at
+most one `SUCCESSFUL` intent per booking. A failed attempt followed by a
+successful one is two intents and one payment. Two successful ones is impossible.
+
+**Terminal is terminal.** A late webhook about a payment that already succeeded
+changes nothing, and one about a payment that already failed cannot resurrect it:
+only a fresh attempt can. That is what makes out-of-order delivery safe.
+
+A booking is payable in every status except `CANCELLED` and `EXPIRED`, `COMPLETED`
+included. Paying after the work is done is an ordinary sequence, not an error.
+
+#### Payment and settlement
+
+**M5's rule changes here, deliberately and visibly.** M5 wrote a settlement when a
+booking reached `COMPLETED`, because no payment existed to wait for. A settlement
+now needs both:
+
+```
+booking COMPLETED  and  a SUCCESSFUL payment   ->  settlement
+```
+
+Either can happen first, and whichever happens second writes it. A customer may
+pay up front and confirm days later, or pay after the work is done; both are
+ordinary and both are tested. A completed booking with no successful payment
+earns its provider nothing, which is the point: provider earnings a customer
+never funded would be a debt the marketplace has no way to cover.
+
+`create_settlement` is the strict form and says why it refused, with
+`SETTLEMENT_AWAITING_PAYMENT` distinguishing "not paid yet" from "not finished
+yet". `settle_if_ready` is the forgiving form both hooks call, since arriving
+second is a normal state rather than an error. The financial invariant, the
+immutability and the one-settlement-per-booking constraint are all untouched.
+
+#### Webhooks
+
+Not a framework. One model and one rule: an event id is seen at most once,
+enforced by a unique index on `(gateway, event_id)`. That is the whole of what
+payment webhooks need now and what payout webhooks will need later.
+
+**The signature is the authentication**, checked over the exact bytes received
+before the body is parsed and before anything is written. Re-serialising parsed
+JSON changes whitespace and key order and would never match, which is why the
+view reads `request.body`. A body that fails is refused with a bare "Rejected."
+and is not recorded: an attacker probing the endpoint learns nothing.
+
+**The payload is not stored.** A charge payload carries the customer's email
+address and their card's last four digits, and keeping a copy of every one of
+those buys very little. What is kept is the handful of fields reconciliation
+reads, plus a SHA-256 digest of the raw body so a disputed event can still be
+matched against the provider's own record.
+
+**Everything after a valid signature answers 200**, including an event about a
+reference we never issued and one that arrived too late to matter. A provider
+that receives anything else retries, and retrying will not change either.
+
+Paystack puts no event id on the envelope, so the adapter builds one from the
+event type and the transaction it concerns. Redelivery produces the same string;
+two different events about one transaction stay distinct.
+
+#### Bank account verification
+
+Ten digits somebody typed is not an account. A provider who mistypes one would
+otherwise have money sent into a stranger's account with nothing having looked
+wrong, and the only check that catches it is asking the bank what name it holds.
+
+A destination is `UNVERIFIED` until a resolver confirms it, and **a payout cannot
+use an unverified destination**. The bank's answer is stored beside what the
+provider typed rather than replacing it, so both can be shown and a mismatch is
+visible. Changing either the account number or the bank discards the previous
+confirmation, because a verification is a statement about one number at one bank
+and says nothing about a different pair.
+
+The account number is still not stored. It is supplied again to verify, which is
+also how we check it is the number on file: a number that does not match the
+stored hash is not this destination's account.
+
+**`REQUEST_PAYOUT`'s capability requirements are unchanged.** Having somewhere to
+be paid is a fact about the payout rather than about the account, so it is domain
+validation with its own error code rather than a fourth row in the policy table.
+
+#### Idempotency
+
+The existing mechanism, extended to one more endpoint: the `Idempotency-Key`
+header the mobile client already sends, stored as a field with a partial unique
+index. A retried payment initialization returns the intent the first attempt
+created and does not ask the provider to collect a second time.
+
+Webhooks deduplicate on the provider's event id instead, because a provider does
+not send our header. Repeated booking completion still needs neither, since the
+lifecycle refuses a second `COMPLETED` and the one-to-one constraint refuses a
+second settlement.
+
+#### Checkout, on the mobile side
+
+Payment happens on the provider's own hosted page, opened in the system browser
+with `expo-linking`, which the app already depends on. Card details never touch
+the app, so no build of it is in scope for PCI and it holds no provider
+credential of any kind. It also needs no native module, so the project stays on
+Expo SDK 54 and keeps working in Expo Go.
+
+Returning from the browser proves nothing: a customer who closed the page and one
+who paid look identical from the app's side. So the app asks the server to check,
+and the server asks the provider.
+
+#### Deferred from M6A
+
+Background workers and queues, and therefore anything periodic: no reconciliation
+sweep, no expiry of stale intents or offers. Payout execution and its webhooks,
+which need Paystack Transfers and a funded balance. Refunds, chargebacks and the
+`Transaction` model that becomes meaningful alongside them. Saved cards, and the
+`SavedAuthorization` model with them. Escrow as a distinct held balance.
 
 ### How verticals stay modular
 
@@ -426,11 +591,12 @@ modification.
 
 | Concern | Choice | Boundary |
 | --- | --- | --- |
-| Payments | Paystack (cards, transfer, USSD) | `payments/gateways/base.py`, not built |
-| Payouts | Paystack Transfers | `payments/transfers/base.py` |
-| Transactional email | Resend or AWS SES | `notifications/email/base.py` |
-| SMS | Termii, with a fallback provider | `notifications/sms/base.py` |
-| Identity verification | Prembly, Youverify or VerifyMe | `providers/identity/base.py` |
+| Payments | Paystack (cards, transfer, USSD) | `payments/gateways/base.py` |
+| Payouts | Paystack Transfers | `payments/transfers/base.py`, not built |
+| Transactional email | Resend | Django's `EMAIL_BACKEND`, `accounts/email/` |
+| SMS | Termii | `accounts/sms/base.py` |
+| Identity verification | Prembly, Youverify or VerifyMe | `providers/identity/base.py`, not built |
+| Bank account resolution | Paystack | `payments/banks/base.py` |
 | Google sign-in | ID token verified with `google-auth` | `accounts/social/google.py` |
 | Push | Expo Push | `notifications/push/base.py` |
 | Media and documents | S3 compatible, private ACL | django-storages |
@@ -731,7 +897,8 @@ backend/apps/
 ├── providers/      profile, verification, offered services, areas, availability
 ├── bookings/       Quote, Booking, status events, Offer, matching engine
 ├── payments/       settlements, earnings, payouts, payout destinations,
-│                   and later the gateway adapters and webhooks
+│                   payment intents, gateway adapters, bank resolution,
+│                   webhook events
 ├── reviews/        ratings and review moderation
 ├── disputes/       dispute threads and resolution
 └── notifications/  templates, email, SMS and push delivery, preferences
@@ -839,11 +1006,21 @@ Built in M5:
   `account_number_last4`, `account_number_hash`, `provider_reference`, `is_active`.
   The account number itself is not a field on this model and is not stored
 
-Deferred to the milestone that charges a customer:
+Built in M6A:
 
-- **PaymentIntent**: `booking`, `customer`, `amount_kobo`, `method`, `gateway`,
-  `gateway_reference`, `status`, `authorization_url`, `idempotency_key`
-- **Transaction**, **WebhookEvent** (unique `event_id`), **SavedAuthorization**
+- **PaymentIntent**: `booking`, `customer`, `reference`, `amount_kobo`, `currency`,
+  `status`, `gateway`, `gateway_reference`, `gateway_status`, `method`,
+  `authorization_url`, `idempotency_key`, `paid_at`, `failed_at`
+- **WebhookEvent**: `gateway`, `event_id` (unique with gateway), `event_type`,
+  `reference`, `amount_kobo`, `currency`, `payload_digest`, `processed_at`,
+  `outcome`. The payload itself is not stored
+- **PayoutDestination** gains `verification_status`, `resolved_account_name`,
+  `verified_at`, `verification_reference`
+
+Still deferred:
+
+- **Transaction** and **SavedAuthorization**, which become meaningful alongside
+  refunds and saved cards
 - **LedgerEntry**, if and when cash bookings need it
 
 A ledger is how cash would work. On a card booking Sync holds the money and releases
@@ -924,7 +1101,10 @@ GET    /api/v1/customer/bookings        cursor paginated
 POST   /api/v1/customer/bookings/{id}/cancel
 POST   /api/v1/customer/bookings/{id}/confirm-completion
 POST   /api/v1/customer/bookings/{id}/review     gated
-POST   /api/v1/customer/payments/intents         gated, idempotent
+POST   /api/v1/customer/bookings/{id}/pay        idempotent
+GET    /api/v1/customer/payments
+GET    /api/v1/customer/payments/{id}
+POST   /api/v1/customer/payments/{id}/verify    asks the provider, not the client
 ```
 
 ### Provider
@@ -946,6 +1126,8 @@ GET    /api/v1/provider/payouts/{id}
 POST   /api/v1/provider/payouts/{id}/cancel      the provider's only lifecycle move
 GET    /api/v1/provider/payout-destination
 PUT    /api/v1/provider/payout-destination
+POST   /api/v1/provider/payout-destination/verify   resolves it with the bank
+GET    /api/v1/provider/banks
 ```
 
 There is deliberately no route by which a provider marks a payout processed or paid.
@@ -957,6 +1139,9 @@ transfer adapter will call.
 ```
 POST   /api/v1/webhooks/paystack        signature verified, idempotent by event id
 ```
+
+Unauthenticated, because the caller has no account here. The signature over the
+raw body is the authentication, and it is checked before the body is parsed.
 
 Admin operations run on customised Django admin for Phase 1. Provider verification
 review, dispute resolution, service management and manual assignment are admin views
@@ -1028,7 +1213,8 @@ app/
 The provider surfaces are built but the provider tab bar is not, so `offers`,
 `earnings`, `payouts`, `payout/[id]`, `payout-request` and `payout-destination`
 currently sit in the one `(app)` group beside the customer screens and are reached
-by direct navigation. Splitting the two role stacks is a navigation change on its
+by direct navigation. `pay/[id]`, the customer checkout screen, sits there too and
+is reached from the booking it pays for. Splitting the two role stacks is a navigation change on its
 own, and doing it inside a domain milestone would mix two kinds of risk.
 
 Three details carry weight. The verification gate is a sheet raised over the current
@@ -1107,24 +1293,26 @@ fix it. That is the point of doing M3 on a single vertical.
 
 ### Open
 
-0. **Production SMS and email providers.** Both verification flows are built and
-   work end to end, but neither has a real provider configured: `SMS_BACKEND`
-   defaults to the console provider and `EMAIL_BACKEND` to Django's console
-   backend, so both print rather than send. Nobody on a real device can receive a
-   code until providers are chosen, credentialed and set. Termii is the documented
-   intention for SMS. This is the last thing standing between the current build
-   and a customer booking, a provider accepting, or a provider withdrawing,
-   unaided.
+0. **Nothing is credentialed yet.** Every production adapter now exists, and none
+   of them has an account behind it. `SMS_BACKEND`, `EMAIL_BACKEND`,
+   `PAYMENT_GATEWAY` and `BANK_RESOLVER` all default to the console or fake
+   implementation, so codes print rather than send and payments move no money.
+   What is needed is a Paystack account with its keys and webhook URL set, a
+   Termii account with an approved sender id, and a Resend account with a
+   verified sending domain. That is configuration rather than code, and it is the
+   last thing standing between the current build and a customer paying for a real
+   booking.
 
    The capability table is now settled for every capability that exists:
    `CREATE_BOOKING` at phone, `ACCEPT_JOB` and `REQUEST_PAYOUT` at phone plus
    email.
 
-0b. **No money enters the system.** M5 built the record of what is owed, not the
-   means of paying it. Nothing charges a customer, nothing transfers to a bank,
-   and a settlement is therefore a claim against money Sync does not yet hold. In
-   production that ordering would be wrong, and the payment integration has to
-   land before any of this is switched on for real providers.
+0b. **Money comes in but does not go out.** M6A closed half of this: a customer
+   can be charged, and a settlement now waits for that payment. The other half is
+   open. A payout still ends with an operator moving money by hand from the admin,
+   because transfer execution needs Paystack Transfers, a funded balance and the
+   webhook path for its results. Until that exists a provider can be paid, but
+   only by a person.
 
 1. **Local infrastructure.** Docker Compose is the chosen approach and the file is in
    the repository, but Docker Desktop must be installed on each development machine.
@@ -1157,6 +1345,9 @@ fix it. That is the point of doing M3 on a single vertical.
 | Network flakiness | A dropped response produces duplicate bookings | Idempotency keys, backoff, small payloads, honest offline states |
 | SMS cost and abuse | Phone verification can be weaponised against a stranger | Per-destination limits, resend cooldown, attempt cap |
 | Offer race conditions | Several providers can accept within milliseconds | Accept runs in a transaction with `select_for_update` |
+| Forged payment webhook | A fake success event would pay a provider for nothing | HMAC over the raw body, then amount and currency checked against our own record |
+| Duplicate charge | A retried tap over a bad connection charges twice | Idempotency key, booking row locked, one successful intent per booking enforced by index |
+| Wrong bank account | One mistyped digit sends money to a stranger | The account is resolved with the bank and the returned name shown before any payout |
 | Payout double-spend | Two devices requesting the same balance pays it out twice | Provider row locked, one live payout per provider enforced by a partial unique index, balance derived not stored |
 | Payout destination exposure | A stored bank account number is a standing liability | Only a hash and the last four digits persist. The full number is never a field |
 | Home entry safety | A stranger in a customer's home. One incident is existential | Approval gates job access, identity shown before arrival, disputes |

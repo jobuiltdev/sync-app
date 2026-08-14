@@ -1,8 +1,9 @@
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { statusLabel } from '@/api/endpoints/bookings';
+import { formatNaira } from '@/lib/money';
 import { Button } from '@/components/ui/Button';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { useBooking, useCancelBooking, useConfirmBooking } from '@/features/bookings/hooks';
@@ -10,6 +11,7 @@ import { colors, fontSizes, fontWeights, radii, spacing } from '@/theme/tokens';
 
 export default function BookingDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const router = useRouter();
   const { data: booking, isPending, error } = useBooking(id);
   const cancel = useCancelBooking();
   const confirm = useConfirmBooking();
@@ -34,6 +36,11 @@ export default function BookingDetailScreen() {
   // rather than deciding for itself, so a stale build cannot offer a move the
   // lifecycle would refuse.
   const canCancel = booking.allowed_transitions.includes('CANCELLED');
+  // Payment is offered while there is still a job to pay for. Whether it is
+  // actually accepted is the server's decision, which refuses a cancelled or
+  // expired booking and an already paid one.
+  const isPayable =
+    booking.total_kobo > 0 && !['CANCELLED', 'EXPIRED'].includes(booking.status);
   const canConfirm = booking.allowed_transitions.includes('COMPLETED');
   const actionError = cancel.error ?? confirm.error;
 
@@ -44,6 +51,14 @@ export default function BookingDetailScreen() {
           <Text style={styles.reference}>{booking.reference}</Text>
           <Text style={styles.title}>{booking.service_name}</Text>
           <StatusPill status={booking.status} />
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Price</Text>
+          <Text style={styles.price}>{formatNaira(booking.total_kobo)}</Text>
+          <Text style={styles.muted}>
+            Agreed when you made this booking, and unchanged since.
+          </Text>
         </View>
 
         <View style={styles.card}>
@@ -81,6 +96,10 @@ export default function BookingDetailScreen() {
           <View accessibilityRole="alert" style={[styles.card, styles.cardError]}>
             <Text style={styles.body}>{actionError.message}</Text>
           </View>
+        ) : null}
+
+        {isPayable ? (
+          <Button label="Pay for this booking" onPress={() => router.push(`/pay/${id}`)} />
         ) : null}
 
         {canConfirm ? (
@@ -147,6 +166,12 @@ const styles = StyleSheet.create({
   cardError: { borderColor: colors.danger, backgroundColor: colors.dangerSoft },
   cardTitle: { fontSize: fontSizes.callout, fontWeight: fontWeights.semibold, color: colors.ink },
   body: { fontSize: fontSizes.body, color: colors.inkSoft },
+  price: {
+    fontSize: fontSizes.title3,
+    fontWeight: fontWeights.semibold,
+    color: colors.ink,
+    fontVariant: ['tabular-nums'],
+  },
   muted: { fontSize: fontSizes.footnote, color: colors.inkMuted },
   detailRow: {
     flexDirection: 'row',

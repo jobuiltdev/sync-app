@@ -15,8 +15,23 @@ real exposure under the NDPR and buys nothing the reference does not already giv
 
 from django.contrib.auth.hashers import check_password, make_password
 from django.db import models
+from django.utils import timezone
 
 from apps.common.models import BaseModel
+
+
+class DestinationStatus(models.TextChoices):
+    """Whether anybody has confirmed this account exists.
+
+    Submitting ten digits proves nothing. A provider who mistypes one would
+    otherwise have money sent into a stranger's account with nothing having
+    looked wrong, and the only check that catches it is asking the bank what name
+    it holds against the number.
+    """
+
+    UNVERIFIED = "UNVERIFIED", "Not yet checked with the bank"
+    VERIFIED = "VERIFIED", "Confirmed with the bank"
+    FAILED = "FAILED", "The bank did not recognise it"
 
 
 class PayoutDestination(BaseModel):
@@ -46,6 +61,18 @@ class PayoutDestination(BaseModel):
     #: exists to answer one question, "is this the same account you gave us
     #: before", and it cannot answer any other.
     account_number_hash = models.CharField(max_length=255)
+
+    verification_status = models.CharField(
+        max_length=12, choices=DestinationStatus.choices, default=DestinationStatus.UNVERIFIED
+    )
+    #: The name the bank holds against this account, as the bank gave it. Kept
+    #: separate from `account_name`, which is what the provider claimed: showing
+    #: both back is what lets somebody notice they have typed their sister's
+    #: account number.
+    resolved_account_name = models.CharField(max_length=140, blank=True)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    #: The lookup provider's handle on the check, for support conversations.
+    verification_reference = models.CharField(max_length=120, blank=True)
 
     #: Where a future transfer adapter records the recipient token it issues.
     #: Blank today. The reason this row can afford to forget the account number is
@@ -85,7 +112,44 @@ class PayoutDestination(BaseModel):
         digits = "".join(character for character in account_number if character.isdigit())
         return check_password(digits, self.account_number_hash)
 
+    def mark_verified(self, *, account_name: str, reference: str = "") -> None:
+        """Records that a bank confirmed this account."""
+        self.verification_status = DestinationStatus.VERIFIED
+        self.resolved_account_name = account_name[:140]
+        self.verification_reference = reference[:120]
+        self.verified_at = timezone.now()
+        self.save(
+            update_fields=[
+                "verification_status",
+                "resolved_account_name",
+                "verification_reference",
+                "verified_at",
+                "updated_at",
+            ]
+        )
+
+    def mark_unverified(self) -> None:
+        """Throws away a previous verification.
+
+        Called whenever the account or the bank changes. A verification is a
+        statement about one number at one bank, so it says nothing at all about a
+        different one, and carrying it over would be the exact mistake this check
+        exists to prevent.
+        """
+        self.verification_status = DestinationStatus.UNVERIFIED
+        self.resolved_account_name = ""
+        self.verification_reference = ""
+        self.verified_at = None
+
+    @property
+    def is_verified(self) -> bool:
+        return self.verification_status == DestinationStatus.VERIFIED
+
     @property
     def is_usable(self) -> bool:
-        """Whether a payout may be requested against this destination."""
-        return self.is_active and bool(self.account_number_hash)
+        """Whether a payout may be requested against this destination.
+
+        Verification is part of this from M6A. Money leaving towards an account
+        nobody has confirmed exists is the failure this gate is for.
+        """
+        return self.is_active and bool(self.account_number_hash) and self.is_verified

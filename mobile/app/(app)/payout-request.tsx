@@ -7,7 +7,12 @@ import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { validateAmount } from '@/features/payments/amount';
 import { useEarnings, useRequestPayout } from '@/features/payments/hooks';
-import { needsDestination, needsVerification, toPayoutOutcome } from '@/features/payments/outcomes';
+import {
+  needsDestination,
+  needsDestinationVerification,
+  needsVerification,
+  toPayoutOutcome,
+} from '@/features/payments/outcomes';
 import { newIdempotencyKey } from '@/lib/idempotency';
 import { formatNaira } from '@/lib/money';
 import { colors, fontSizes, fontWeights, radii, spacing } from '@/theme/tokens';
@@ -93,6 +98,14 @@ export default function PayoutRequestScreen() {
               />
             ) : null}
 
+            {needsDestinationVerification(outcome) ? (
+              <Button
+                label="Confirm your bank account"
+                variant="secondary"
+                onPress={() => router.push('/payout-destination')}
+              />
+            ) : null}
+
             {outcome.isRetryable ? (
               <Button label="Try again" variant="secondary" onPress={submit} />
             ) : null}
@@ -117,6 +130,8 @@ function headline(failure: string): string {
       return 'Verify your details first';
     case 'NO_DESTINATION':
       return 'No bank account on file';
+    case 'UNVERIFIED_DESTINATION':
+      return 'Your bank account is not confirmed';
     case 'INSUFFICIENT_BALANCE':
       return 'Not enough available';
     case 'ALREADY_REQUESTED':

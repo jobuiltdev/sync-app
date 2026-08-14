@@ -1,11 +1,16 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
-import { usePayoutDestination, useSavePayoutDestination } from '@/features/payments/hooks';
+import {
+  useBanks,
+  usePayoutDestination,
+  useSavePayoutDestination,
+  useVerifyPayoutDestination,
+} from '@/features/payments/hooks';
 import { toPayoutOutcome } from '@/features/payments/outcomes';
 import { colors, fontSizes, fontWeights, radii, spacing } from '@/theme/tokens';
 
@@ -28,7 +33,10 @@ export default function PayoutDestinationScreen() {
   const [accountName, setAccountName] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
 
-  const outcome = toPayoutOutcome(save.error);
+  const verify = useVerifyPayoutDestination();
+  const banks = useBanks();
+
+  const outcome = toPayoutOutcome(save.error ?? verify.error);
   const current = existing.data;
   const digits = accountNumber.replace(/\D/g, '');
   const isComplete =
@@ -71,6 +79,37 @@ export default function PayoutDestinationScreen() {
             <Text style={styles.body}>{current.bank_name}</Text>
             <Text style={styles.body}>{current.account_name}</Text>
             <Text style={styles.account}>Ending {current.account_number_last4}</Text>
+
+            {current.is_verified ? (
+              <>
+                <Text style={styles.confirmed}>
+                  Confirmed with the bank as {current.resolved_account_name}
+                </Text>
+                <Text style={styles.muted}>
+                  If that is not you, save the correct account below.
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.body}>
+                  Not confirmed yet. Enter the account number again and we will check it
+                  with the bank. You cannot be paid until this is done.
+                </Text>
+                <Field
+                  label="Account number"
+                  value={accountNumber}
+                  onChangeText={setAccountNumber}
+                  placeholder={`Ending ${current.account_number_last4}`}
+                  keyboardType="number-pad"
+                />
+                <Button
+                  label="Confirm with the bank"
+                  loading={verify.isPending}
+                  disabled={digits.length < 10}
+                  onPress={() => verify.mutate(digits)}
+                />
+              </>
+            )}
           </View>
         ) : (
           <View style={styles.card}>
@@ -93,6 +132,28 @@ export default function PayoutDestinationScreen() {
           placeholder="058"
           keyboardType="number-pad"
         />
+
+        {banks.data && banks.data.length > 0 ? (
+          <View style={styles.banks}>
+            <Text style={styles.muted}>Tap a bank to fill both fields.</Text>
+            <View style={styles.bankRow}>
+              {banks.data.map((bank) => (
+                <Pressable
+                  key={bank.code}
+                  accessibilityRole="button"
+                  accessibilityLabel={bank.name}
+                  onPress={() => {
+                    setBankCode(bank.code);
+                    setBankName(bank.name);
+                  }}
+                  style={({ pressed }) => [styles.bankChip, pressed && styles.bankChipPressed]}
+                >
+                  <Text style={styles.bankChipText}>{bank.name}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        ) : null}
         <Field
           label="Account name"
           value={accountName}
@@ -155,4 +216,17 @@ const styles = StyleSheet.create({
   body: { fontSize: fontSizes.body, color: colors.inkSoft },
   muted: { fontSize: fontSizes.footnote, color: colors.inkMuted },
   account: { fontSize: fontSizes.footnote, color: colors.inkMuted, fontVariant: ['tabular-nums'] },
+  // Confirmation is stated in words rather than shown as a colour, so it reads
+  // the same to somebody with a colour vision deficiency.
+  confirmed: { fontSize: fontSizes.footnote, fontWeight: fontWeights.medium, color: colors.success },
+  banks: { gap: spacing.sm },
+  bankRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  bankChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.pill,
+    backgroundColor: colors.surfaceSunk,
+  },
+  bankChipPressed: { backgroundColor: colors.accentSoft },
+  bankChipText: { fontSize: fontSizes.caption, color: colors.inkSoft },
 });

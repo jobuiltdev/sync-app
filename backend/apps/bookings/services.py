@@ -121,17 +121,18 @@ def transition(
         )
 
         if target == BookingStatus.COMPLETED:
-            # Finishing a job is what makes money owed, so the settlement is
-            # written in the same transaction as the completion. Either both
-            # happen or neither does, and there is no window in which a booking is
-            # complete but has earned nobody anything.
+            # Finishing a job is one of the two things that make money owed. The
+            # other is the customer having paid, and either can happen first, so
+            # this asks rather than asserts: if the booking is already paid for,
+            # the settlement is written in the same transaction as the completion,
+            # and if it is not, the payment path writes it when the money lands.
             #
-            # An explicit call rather than a signal: this is the one place a
-            # booking becomes money, and it should be readable here. The import is
-            # local because payments depends on bookings for the Booking itself.
-            from apps.payments.services import create_settlement
+            # An explicit call rather than a signal: this is one of the two places
+            # a booking becomes money, and it should be readable here. The import
+            # is local because payments depends on bookings for the Booking.
+            from apps.payments.services import settle_if_ready
 
-            create_settlement(booking)
+            settle_if_ready(booking)
 
     return booking
 

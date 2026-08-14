@@ -43,6 +43,8 @@ export interface BookingSummary {
   /** Null while the booking is still MATCHING and nobody has taken it. */
   provider_name: string | null;
   address_summary: string;
+  /** What the customer agreed to pay, fixed when the booking was made. */
+  total_kobo: number;
   scheduled_for: string | null;
   created_at: string;
 }

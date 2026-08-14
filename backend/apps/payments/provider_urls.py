@@ -1,5 +1,6 @@
 from django.urls import path
 
+from apps.payments.payment_views import ProviderBankListView, ProviderDestinationVerifyView
 from apps.payments.views import (
     ProviderEarningsView,
     ProviderPayoutCancelView,
@@ -23,4 +24,10 @@ urlpatterns = [
         ProviderPayoutDestinationView.as_view(),
         name="payout-destination",
     ),
+    path(
+        "payout-destination/verify/",
+        ProviderDestinationVerifyView.as_view(),
+        name="payout-destination-verify",
+    ),
+    path("banks/", ProviderBankListView.as_view(), name="banks"),
 ]

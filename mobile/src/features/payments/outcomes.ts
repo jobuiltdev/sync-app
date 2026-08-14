@@ -11,6 +11,7 @@ import { ApiError } from '@/api/errors';
 export type PayoutFailure =
   | 'VERIFICATION_REQUIRED'
   | 'NO_DESTINATION'
+  | 'UNVERIFIED_DESTINATION'
   | 'INSUFFICIENT_BALANCE'
   | 'ALREADY_REQUESTED'
   | 'NOT_ACTIONABLE'
@@ -35,6 +36,7 @@ const BY_CODE: Record<string, PayoutFailure> = {
   PHONE_VERIFICATION_REQUIRED: 'VERIFICATION_REQUIRED',
   EMAIL_VERIFICATION_REQUIRED: 'VERIFICATION_REQUIRED',
   INVALID_PAYOUT_DESTINATION: 'NO_DESTINATION',
+  PAYOUT_DESTINATION_NOT_VERIFIED: 'UNVERIFIED_DESTINATION',
   INSUFFICIENT_BALANCE: 'INSUFFICIENT_BALANCE',
   PAYOUT_ALREADY_REQUESTED: 'ALREADY_REQUESTED',
   PAYOUT_NOT_ACTIONABLE: 'NOT_ACTIONABLE',
@@ -97,4 +99,11 @@ export function needsVerification(outcome: PayoutOutcome | null): boolean {
 
 export function needsDestination(outcome: PayoutOutcome | null): boolean {
   return outcome !== null && outcome.failure === 'NO_DESTINATION';
+}
+
+/** An account is on file but no bank has confirmed it exists. A different
+ *  problem from having none, and it needs a different prompt: confirm the one
+ *  you have, rather than add one. */
+export function needsDestinationVerification(outcome: PayoutOutcome | null): boolean {
+  return outcome !== null && outcome.failure === 'UNVERIFIED_DESTINATION';
 }

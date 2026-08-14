@@ -81,6 +81,84 @@ class InvalidPayoutDestination(APIError):
     default_detail = "Add the bank account you want to be paid into first."
 
 
+class BookingNotPayable(APIError):
+    """Nothing to pay for, or no longer anything to pay for."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_code = "BOOKING_NOT_PAYABLE"
+    default_detail = "This booking cannot be paid for."
+
+
+class PaymentNotFound(APIError):
+    """Not this customer's payment, or no such payment.
+
+    One code and a 404 for both, matching how bookings, offers and payouts
+    already treat somebody else's row.
+    """
+
+    status_code = status.HTTP_404_NOT_FOUND
+    default_code = "PAYMENT_NOT_FOUND"
+    default_detail = "That payment could not be found."
+
+
+class PaymentAmountMismatch(APIError):
+    """A provider reported a payment for a sum that is not the one we asked for.
+
+    Refused rather than accepted at whatever figure arrived. This is the check
+    that stops a booking being marked paid by a transaction for one naira, and
+    the one a hostile webhook would be aiming at.
+
+    The details carry the caller's own booking amount, which they can already
+    read, and never the figure the provider reported: that belongs to whatever
+    other transaction produced it.
+    """
+
+    status_code = status.HTTP_409_CONFLICT
+    default_code = "PAYMENT_AMOUNT_MISMATCH"
+    default_detail = "That payment does not match the amount for this booking."
+
+    def __init__(
+        self, *, expected_kobo: int, reported_kobo: int, message: str | None = None
+    ) -> None:
+        super().__init__(message, details={"expected_kobo": expected_kobo})
+        # Kept off the wire but available to a caller that has the exception, so
+        # the webhook path can log the discrepancy without exposing it.
+        self.reported_kobo = reported_kobo
+
+
+class InvalidWebhookSignature(APIError):
+    """A webhook body that did not come from the provider.
+
+    401 rather than 400. The request is not malformed, it is unauthenticated, and
+    the response says nothing else: an attacker probing the endpoint learns only
+    that they were refused.
+    """
+
+    status_code = status.HTTP_401_UNAUTHORIZED
+    default_code = "INVALID_WEBHOOK_SIGNATURE"
+    default_detail = "Rejected."
+
+
+class BankLookupFailed(APIError):
+    """The bank did not recognise the account, or could not be asked.
+
+    One code for both. From the provider's side the next step is the same: check
+    the number and the bank and try again.
+    """
+
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    default_code = "BANK_ACCOUNT_NOT_RESOLVED"
+    default_detail = "We could not confirm that account with the bank. Check the details."
+
+
+class DestinationNotVerified(APIError):
+    """A payout was asked for against an account nobody has confirmed."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    default_code = "PAYOUT_DESTINATION_NOT_VERIFIED"
+    default_detail = "Confirm your bank account before requesting a payout."
+
+
 class PayoutNotActionable(APIError):
     """A move the payout lifecycle does not permit, or not by this actor.
 

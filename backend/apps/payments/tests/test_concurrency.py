@@ -9,9 +9,7 @@ Two races matter here. Two providers cannot both be paid the same earnings, and
 one completed booking cannot earn its provider two settlements.
 """
 
-import threading
-
-from django.db import connections, transaction
+from django.db import transaction
 from django.test import TransactionTestCase
 
 from apps.bookings.services import transition
@@ -20,37 +18,8 @@ from apps.bookings.tests.factories import VALID_CLEANING_DETAILS, accept_first_o
 from apps.payments import services
 from apps.payments.payouts import RESERVING_STATUSES, PayoutRequest, PayoutStatus
 from apps.payments.settlements import BookingSettlement
-from apps.payments.tests.factories import earn, earning_setup, make_destination
-
-
-def run_together(target, arguments: list[tuple]) -> list[Exception | None]:
-    """Fires one thread per argument tuple, released from a barrier together.
-
-    The barrier is what makes this a race rather than a sequence. Each thread
-    closes its own connection afterwards, since a thread that leaves one open
-    holds a lock the test then waits on forever.
-    """
-    outcomes: list[Exception | None] = [None] * len(arguments)
-    barrier = threading.Barrier(len(arguments))
-
-    def attempt(index: int, args: tuple) -> None:
-        try:
-            barrier.wait(timeout=10)
-            target(*args)
-        except Exception as exc:
-            outcomes[index] = exc
-        finally:
-            connections.close_all()
-
-    threads = [
-        threading.Thread(target=attempt, args=(index, args)) for index, args in enumerate(arguments)
-    ]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=30)
-
-    return outcomes
+from apps.payments.tests.concurrency import run_together
+from apps.payments.tests.factories import earn, earning_setup, make_destination, pay_booking
 
 
 class ConcurrentPayoutRequestTests(TransactionTestCase):
@@ -146,6 +115,9 @@ class ConcurrentSettlementTests(TransactionTestCase):
         )
         accept_first_offer(booking, self.setup["provider"])
         booking.refresh_from_db()
+        # Paid up front, so the completion is the second of the two conditions
+        # and is therefore what races to write the settlement.
+        pay_booking(booking)
 
         transition(
             booking,

@@ -182,6 +182,18 @@ SPECTACULAR_SETTINGS = {
 # must set SMS_BACKEND to a real provider.
 SMS_BACKEND = env("SMS_BACKEND", default="apps.accounts.sms.console.ConsoleSMSProvider")
 
+# Termii, the documented production choice. Read whatever SMS_BACKEND is set to,
+# so a deployment that has not switched over carries empty values harmlessly.
+# SENDER_ID must be one Termii has approved for the account; an unapproved sender
+# is the usual reason messages are accepted and never delivered.
+TERMII = {
+    "API_KEY": env("TERMII_API_KEY", default=""),
+    "SENDER_ID": env("TERMII_SENDER_ID", default="Sync"),
+    "CHANNEL": env("TERMII_CHANNEL", default="dnd"),
+    "API_ROOT": env("TERMII_API_ROOT", default="https://api.ng.termii.com"),
+    "TIMEOUT_SECONDS": env.int("TERMII_TIMEOUT_SECONDS", default=20),
+}
+
 PHONE_VERIFICATION = {
     "CODE_LENGTH": 6,
     "TTL_SECONDS": 600,
@@ -208,6 +220,17 @@ EMAIL_VERIFICATION = {
 EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Sync <no-reply@sync.ng>")
 
+# Resend, for the same reason Termii was chosen for SMS: one API key and a
+# verified domain is the whole setup, against an AWS account, an SES sandbox exit
+# request and IAM for the alternative. docs/architecture.md left this open
+# between Resend and SES; the decision and its reasoning are recorded there now.
+# Switching to SES is a different EMAIL_BACKEND and no other change.
+RESEND = {
+    "API_KEY": env("RESEND_API_KEY", default=""),
+    "API_ROOT": env("RESEND_API_ROOT", default="https://api.resend.com"),
+    "TIMEOUT_SECONDS": env.int("RESEND_TIMEOUT_SECONDS", default=20),
+}
+
 # What Sync keeps from a completed booking, in basis points: an integer
 # hundredth of a percent, so 2000 is twenty percent. Basis points rather than a
 # percentage because the whole money path is integer arithmetic and a percentage
@@ -221,6 +244,37 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Sync <no-reply@sync.ng>"
 PLATFORM_COMMISSION = {
     "RATE_BPS": env.int("PLATFORM_COMMISSION_RATE_BPS", default=2000),
 }
+
+# --- external providers ---------------------------------------------------
+# Every integration is selected by a dotted path and configured from the
+# environment. The defaults are the fake or console implementations, so a clean
+# checkout runs, and its tests pass, with no external account anywhere. Nothing
+# here opens a connection at import: each adapter is constructed on use.
+
+# Takes money from customers. The fake gateway moves nothing and reports every
+# payment as pending until a test says otherwise.
+PAYMENT_GATEWAY = env("PAYMENT_GATEWAY", default="apps.payments.gateways.fake.FakeGateway")
+
+# Signs and checks webhooks for the fake gateway, so the whole webhook path
+# including signature rejection is exercised without a Paystack account. Not a
+# production credential: with the real gateway configured this is never read.
+PAYMENT_GATEWAY_FAKE = {
+    "SECRET": env("PAYMENT_GATEWAY_FAKE_SECRET", default="fake-gateway-signing-secret"),
+}
+
+# Paystack. Both keys come from the dashboard. The secret key signs API requests
+# and verifies webhook signatures and must never leave the server; the public key
+# is safe in a client and is here only so one place describes the account.
+PAYSTACK = {
+    "SECRET_KEY": env("PAYSTACK_SECRET_KEY", default=""),
+    "PUBLIC_KEY": env("PAYSTACK_PUBLIC_KEY", default=""),
+    "CURRENCY": "NGN",
+    "TIMEOUT_SECONDS": env.int("PAYSTACK_TIMEOUT_SECONDS", default=20),
+}
+
+# Confirms that a payout destination is a real account before money is sent to
+# it. Paystack resolves account numbers, so the same credentials serve both.
+BANK_RESOLVER = env("BANK_RESOLVER", default="apps.payments.banks.fake.FakeBankResolver")
 
 # How long a provider has to answer an offer. Long enough that somebody working
 # does not lose a job by not looking at their phone, short enough that a customer

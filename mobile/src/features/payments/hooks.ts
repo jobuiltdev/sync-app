@@ -1,8 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
+  type PaymentIntent,
+  fetchPayment,
+  paymentKeys as customerPaymentKeys,
+  startPayment,
+  verifyPayment,
+} from '@/api/endpoints/payments-customer';
+import {
   type PayoutDestinationInput,
   cancelPayout,
+  fetchBanks,
   fetchEarnings,
   fetchPayout,
   fetchPayoutDestination,
@@ -11,7 +19,9 @@ import {
   paymentKeys,
   requestPayout,
   savePayoutDestination,
+  verifyPayoutDestination,
 } from '@/api/endpoints/payments';
+import { bookingKeys } from '@/api/endpoints/bookings';
 
 export function useEarnings() {
   return useQuery({
@@ -101,5 +111,84 @@ export function useSavePayoutDestination() {
     onSuccess: (destination) => {
       queryClient.setQueryData(paymentKeys.destination, destination);
     },
+  });
+}
+
+export function useBanks() {
+  return useQuery({
+    queryKey: paymentKeys.banks,
+    queryFn: ({ signal }) => fetchBanks(signal),
+    // Bank lists change when a bank merges or a new one is licensed, which is
+    // not often. Refetching on every visit would spend a request for nothing.
+    staleTime: 24 * 60 * 60 * 1000,
+  });
+}
+
+/** Confirms the account with the bank. The number is sent again because the
+ *  server does not store it. */
+export function useVerifyPayoutDestination() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (accountNumber: string) => verifyPayoutDestination(accountNumber),
+    onSuccess: (destination) => {
+      queryClient.setQueryData(paymentKeys.destination, destination);
+      // Whether a payout can be requested has just changed.
+      void queryClient.invalidateQueries({ queryKey: paymentKeys.earnings });
+    },
+  });
+}
+
+// --- customer payments -----------------------------------------------------
+
+/**
+ * Starts paying for a booking.
+ *
+ * The caller holds the idempotency key steady across attempts, for the same
+ * reason a payout request does: a tap that times out may well have been
+ * received, and a fresh key would turn the retry into a second collection.
+ */
+export function useStartPayment() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      bookingId,
+      idempotencyKey,
+    }: {
+      bookingId: string;
+      idempotencyKey: string;
+    }) => startPayment(bookingId, idempotencyKey),
+    onSuccess: (payment) => {
+      queryClient.setQueryData(customerPaymentKeys.detail(payment.id), payment);
+    },
+  });
+}
+
+/**
+ * Asks the server to check with the payment provider.
+ *
+ * Sends nothing. The server ignores any body, so there is nothing useful to put
+ * in one, and a status here would be a claim the server is right to disregard.
+ */
+export function useVerifyPayment() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) => verifyPayment(id),
+    onSuccess: (payment: PaymentIntent) => {
+      queryClient.setQueryData(customerPaymentKeys.detail(payment.id), payment);
+      // A successful payment can settle a completed booking, so the booking the
+      // customer is looking at may have changed too.
+      void queryClient.invalidateQueries({ queryKey: bookingKeys.all });
+    },
+  });
+}
+
+export function usePayment(id: string) {
+  return useQuery({
+    queryKey: customerPaymentKeys.detail(id),
+    queryFn: ({ signal }) => fetchPayment(id, signal),
+    enabled: Boolean(id),
   });
 }

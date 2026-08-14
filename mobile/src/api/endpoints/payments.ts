@@ -5,6 +5,8 @@ export type PayoutStatus = 'REQUESTED' | 'PROCESSING' | 'PAID' | 'FAILED' | 'CAN
 
 export type SettlementStatus = 'PAYABLE';
 
+export type DestinationStatus = 'UNVERIFIED' | 'VERIFIED' | 'FAILED';
+
 /**
  * The provider's financial position.
  *
@@ -58,12 +60,23 @@ export interface PayoutDestination {
   id: string;
   bank_code: string;
   bank_name: string;
+  /** What the provider typed. Compare it against `resolved_account_name`. */
   account_name: string;
   /** All the app ever sees of the account number. The rest is not stored. */
   account_number_last4: string;
+  verification_status: DestinationStatus;
+  /** The name the bank holds. Blank until the account is confirmed. */
+  resolved_account_name: string;
+  verified_at: string | null;
+  is_verified: boolean;
   is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface Bank {
+  code: string;
+  name: string;
 }
 
 export interface PayoutDestinationInput {
@@ -118,12 +131,29 @@ export function savePayoutDestination(
   return api.put<PayoutDestination>('/api/v1/provider/payout-destination/', input);
 }
 
+export function fetchBanks(signal?: AbortSignal): Promise<Bank[]> {
+  return api.get<Bank[]>('/api/v1/provider/banks/', { signal });
+}
+
+/**
+ * Asks the bank to confirm the account on file.
+ *
+ * The number is sent again because nothing stores it: the server keeps a hash
+ * and the last four digits, so it cannot resolve an account it no longer holds.
+ */
+export function verifyPayoutDestination(accountNumber: string): Promise<PayoutDestination> {
+  return api.post<PayoutDestination>('/api/v1/provider/payout-destination/verify/', {
+    account_number: accountNumber,
+  });
+}
+
 export const paymentKeys = {
   earnings: ['earnings'] as const,
   settlements: ['earnings', 'settlements'] as const,
   payouts: ['payouts'] as const,
   payout: (id: string) => ['payouts', id] as const,
   destination: ['payout-destination'] as const,
+  banks: ['banks'] as const,
 };
 
 const STATUS_LABELS: Record<PayoutStatus, string> = {

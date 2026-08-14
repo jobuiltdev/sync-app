@@ -22,6 +22,7 @@ from apps.payments.tests.factories import (
     earn,
     earning_setup,
     make_priced_service,
+    pay_booking,
 )
 
 
@@ -29,7 +30,13 @@ class SettlementCreationTests(TestCase):
     def setUp(self):
         self.setup = earning_setup()
 
-    def book(self):
+    def book(self, *, paid: bool = True):
+        """A booking taken by the setup's provider, paid for unless asked not to.
+
+        Paid by default because a settlement now needs both the work finished and
+        the money arrived, and most of these are about the settlement rather than
+        about which of the two came first.
+        """
         booking = create_booking(
             customer=self.setup["customer"],
             service=self.setup["service"],
@@ -38,6 +45,8 @@ class SettlementCreationTests(TestCase):
         )
         accept_first_offer(booking, self.setup["provider"])
         booking.refresh_from_db()
+        if paid:
+            pay_booking(booking)
         return booking
 
     def test_completing_a_booking_creates_its_settlement(self):
@@ -220,6 +229,7 @@ class SettlementConstraintTests(TestCase):
         )
         accept_first_offer(booking, self.setup["provider"])
         booking.refresh_from_db()
+        pay_booking(booking)
         self.booking = complete_booking(booking)
         BookingSettlement.objects.all().delete()
 
