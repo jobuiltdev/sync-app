@@ -8,7 +8,6 @@
     "scheme": "sync",
     "userInterfaceStyle": "light",
     "ios": {
-      "icon": "./assets/expo.icon",
       "supportsTablet": false,
       "bundleIdentifier": "ng.sync.app"
     },

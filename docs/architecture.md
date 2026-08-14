@@ -474,6 +474,19 @@ mobile/
 Native module versions come from the Expo SDK manifest via `npx expo install`, never
 from npm latest. The SDK manifest and npm latest disagree for several packages.
 
+**The app is pinned to Expo SDK 54, not the newest SDK.** Expo Go on the app stores
+supports only the current SDK, so a project on a newer one cannot be opened by an
+Expo Go that has not updated. The development device available for testing is on
+SDK 54 and cannot update, so the project matches it rather than the device matching
+the project. The downgrade from 57 cost no application code: the suite passed
+unchanged, because nothing here touches an API that moved between those releases.
+
+This is a testing convenience with an expiry date. Google sign-in, maps and push all
+require a development build rather than Expo Go, and the first of those forces the
+issue. When a dev build exists the SDK pin is free to move again, and moving it is
+the preferred direction: SDK 54 leaves the project on React Native 0.81 and React
+19.1 while the ecosystem moves on.
+
 ### Verification handled once
 
 Gating lives in a single `VerificationGate` wrapper rather than in each screen. The
