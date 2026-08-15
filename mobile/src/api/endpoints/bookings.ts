@@ -91,6 +91,44 @@ export function confirmBooking(id: string): Promise<BookingDetail> {
   return api.post<BookingDetail>(`/api/v1/customer/bookings/${id}/confirm/`, {});
 }
 
+// --- the provider side of a booking ----------------------------------------
+//
+// The same booking, from the other end. A provider advances their own work; the
+// customer confirms it is done. Which of these the server will accept is decided
+// by the actor as well as the edge, so the app reads `allowed_transitions` and
+// still lets the server refuse.
+
+export function fetchJobs(signal?: AbortSignal): Promise<Paginated<BookingSummary>> {
+  return api.get<Paginated<BookingSummary>>('/api/v1/provider/bookings/', { signal });
+}
+
+export function fetchJob(id: string, signal?: AbortSignal): Promise<BookingDetail> {
+  return api.get<BookingDetail>(`/api/v1/provider/bookings/${id}/`, { signal });
+}
+
+/** Each action is its own route. The client never names a status, so there is no
+ *  path by which it could ask for an arbitrary one. */
+export function markEnRoute(id: string): Promise<BookingDetail> {
+  return api.post<BookingDetail>(`/api/v1/provider/bookings/${id}/en-route/`, {});
+}
+
+export function startJob(id: string): Promise<BookingDetail> {
+  return api.post<BookingDetail>(`/api/v1/provider/bookings/${id}/start/`, {});
+}
+
+export function finishJob(id: string): Promise<BookingDetail> {
+  return api.post<BookingDetail>(`/api/v1/provider/bookings/${id}/finish/`, {});
+}
+
+export function cancelJob(id: string, reason?: string): Promise<BookingDetail> {
+  return api.post<BookingDetail>(`/api/v1/provider/bookings/${id}/cancel/`, { reason });
+}
+
+export const jobKeys = {
+  all: ['jobs'] as const,
+  detail: (id: string) => ['jobs', id] as const,
+};
+
 export const bookingKeys = {
   all: ['bookings'] as const,
   detail: (id: string) => ['bookings', id] as const,

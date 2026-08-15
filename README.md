@@ -239,6 +239,30 @@ sync-v1/
 └── .github/workflows/
 ```
 
+## The app
+
+One Expo app, both roles. A provider is often also a customer, and one app lets a
+person switch without reinstalling, which is why the provider surfaces sit beside
+the customer ones on the home screen rather than behind a separate login.
+
+| Screen | For |
+| --- | --- |
+| `home` | Browse the catalog, and every entry point below |
+| `book/[slug]`, `bookings`, `booking/[id]` | Request a service, then follow it |
+| `addresses` | Where work happens. The landmark matters more than the street |
+| `verify-phone` | Both channels, phone and email |
+| `pay/[id]` | Hosted checkout, then ask the server what happened |
+| `provider` | Become a provider, list services and areas, take work on or off |
+| `offers`, `offer/[id]` | Jobs offered to you, accept or decline |
+| `jobs`, `job/[id]` | Work you took, and moving it forward |
+| `earnings`, `payouts`, `payout/[id]`, `payout-request` | What you earned and getting paid |
+| `payout-destination` | Your bank account, confirmed with the bank |
+
+Two rules the app holds to. It renders what the server says is possible, reading
+`allowed_transitions` and capability refusals rather than deciding for itself; and
+it never computes money, because a balance the app worked out is a balance that
+disagrees with the server the moment another device does anything.
+
 ## Background work
 
 Two more processes, neither started by `runserver`. Nothing periodic happens

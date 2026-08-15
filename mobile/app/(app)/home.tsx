@@ -65,9 +65,42 @@ export default function HomeScreen() {
           ))
         )}
 
-        <Button label="Your bookings" variant="secondary" onPress={() => router.push('/bookings')} />
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>You</Text>
+          <Button
+            label="Your bookings"
+            variant="secondary"
+            onPress={() => router.push('/bookings')}
+          />
+          <Button
+            label="Your addresses"
+            variant="secondary"
+            onPress={() => router.push('/addresses')}
+          />
+          <Button
+            label="Verify your details"
+            variant="secondary"
+            onPress={() => router.push('/verify-phone')}
+          />
+        </View>
 
-        <Button label="Earnings" variant="secondary" onPress={() => router.push('/earnings')} />
+        {/* The provider surfaces. One account can be both, which is why these
+            sit beside the customer ones rather than behind a separate login. */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Working with Sync</Text>
+          <Button
+            label="Your provider profile"
+            variant="secondary"
+            onPress={() => router.push('/provider')}
+          />
+          <Button
+            label="Jobs offered to you"
+            variant="secondary"
+            onPress={() => router.push('/offers')}
+          />
+          <Button label="Your jobs" variant="secondary" onPress={() => router.push('/jobs')} />
+          <Button label="Earnings" variant="secondary" onPress={() => router.push('/earnings')} />
+        </View>
 
         <Button
           label="Sign out"

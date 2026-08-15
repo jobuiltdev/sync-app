@@ -862,6 +862,47 @@ No domain model, no lifecycle, no invariant and no capability. The financial
 guarantees are exactly the ones M5 and M6 established, and the same tests hold
 them. Nothing was weakened to make a gate pass.
 
+### The app, completed in M8
+
+Every endpoint the backend exposes now has a way into it from the app, which was
+not true before: a person could book and pay, but nobody could become a provider,
+list a service, say where they worked, advance a job they had taken, or manage an
+address, because those screens did not exist. The API for all of it was already
+built and tested. M8 is the client for it.
+
+**One app, both roles.** The provider surfaces sit beside the customer ones on
+the home screen rather than behind a separate login, because a provider is often
+also a customer and the account is already the same account.
+
+**The app renders what the server says, and decides nothing.** Which actions a
+job offers comes from `allowed_transitions`; whether a provider may accept comes
+from the capability refusal the API returns. The one piece of local reasoning is
+the eligibility list on the provider screen, and it is advisory by construction:
+it mirrors the conditions dispatch actually filters on so a provider waiting for
+work can see what is missing, and it gates nothing. Dispatch decides.
+
+**Approval stays adjudicated.** `verification_status` is read-only on the
+serializer, so there is nothing for the app to send, and the screen shows the
+status rather than offering a control that changes it. A provider cannot approve
+themselves, and the client has no path that would let them try.
+
+**A provider never closes their own job.** They move work forward as far as
+`AWAITING_CONFIRMATION`; the customer confirms. That is the lifecycle M3 defined,
+and the job screen exposes exactly the transitions the server permits for the
+actor making the request.
+
+#### Deferred from M8
+
+**Event notifications.** Sync has both delivery channels, an SMS provider and an
+email backend, and both are used for verification. What it does not have is
+anything that reaches for them when a booking is accepted, a payment succeeds or
+a payout fails. That work is a domain of its own: what to send, on which
+transition, to whom, how a person turns it off, and how a delivery failure is
+recorded without becoming a second state machine beside the lifecycle. Building
+half of it would have meant sending some events and silently not others, which is
+worse than sending none. It is the largest remaining gap between this system and
+one a customer would find complete.
+
 
 ### How verticals stay modular
 
