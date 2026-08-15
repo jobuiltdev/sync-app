@@ -56,6 +56,8 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.bookings.state import ActorType
+from apps.notifications import service as notifications
+from apps.notifications.events import EventType
 from apps.payments.errors import (
     InsufficientBalance,
     InvalidPayoutDestination,
@@ -181,6 +183,13 @@ def execute_payout(payout_id: Any, *, actor_type: str = ActorType.SYSTEM) -> Pay
                 "updated_at",
             ]
         )
+
+        # Announced here rather than by `transition_payout`, because this is the
+        # one route to PROCESSING that does not go through it: the status and the
+        # reference have to be reserved in a single write before the provider is
+        # contacted. Inside the transaction, so a submission that never commits
+        # tells nobody their money is on the way.
+        notifications.payout_status(payout, EventType.PAYOUT_PROCESSING)
 
     # --- the external call, outside any transaction ------------------------
     # Deliberately not inside the block above. Holding a database transaction

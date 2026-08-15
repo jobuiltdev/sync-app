@@ -19,6 +19,8 @@ from rest_framework import status as http_status
 from apps.bookings.offers import Offer, OfferKind, OfferStatus
 from apps.bookings.state import ActorType, BookingStatus
 from apps.common.exceptions import APIError
+from apps.notifications import service as notifications
+from apps.notifications.events import EventType
 from apps.providers.models import ProviderProfile, VerificationStatus
 
 if TYPE_CHECKING:
@@ -95,6 +97,10 @@ def eligible_providers(service: Service, state: str) -> QuerySet[ProviderProfile
             is_accepting_jobs=True,
         )
         .filter(Q(service_areas__state=state))
+        # Every provider matched here is about to be offered the job and then told
+        # about it, and telling them needs their user row. Fetched with the
+        # provider rather than one query per offer.
+        .select_related("user")
         .distinct()
     )
 
@@ -115,7 +121,7 @@ def dispatch_offers(
     expires_at = timezone.now() + offer_ttl()
 
     if direct_provider is not None:
-        return [
+        offers = [
             Offer.objects.create(
                 booking=booking,
                 provider=direct_provider,
@@ -123,12 +129,14 @@ def dispatch_offers(
                 expires_at=expires_at,
             )
         ]
+        _announce_offers(offers)
+        return offers
 
     providers = list(eligible_providers(booking.service, booking.address_state))
     if not providers:
         raise NoEligibleProviders
 
-    return Offer.objects.bulk_create(
+    offers = Offer.objects.bulk_create(
         [
             Offer(
                 booking=booking,
@@ -139,6 +147,25 @@ def dispatch_offers(
             for provider in providers
         ]
     )
+
+    # An offer nobody is told about is an offer nobody takes. This is the point of
+    # the whole notification system for providers: a broadcast that only reaches
+    # somebody who happens to have the app open is not a marketplace.
+    _announce_offers(offers)
+
+    return offers
+
+
+def _announce_offers(offers: list[Offer]) -> None:
+    """Tells each provider they have been offered work.
+
+    One message each, and each one deduplicated on its own offer, so a booking
+    re-dispatched after a failure does not offer the same job twice to the same
+    person. Nothing here can raise: `notify` swallows its own failures, and a
+    provider who cannot be reached simply does not get told.
+    """
+    for offer in offers:
+        notifications.offer_received(offer)
 
 
 def _terminal_error(offer: Offer) -> Exception:
@@ -213,9 +240,15 @@ def accept_offer(offer_id, provider: ProviderProfile, actor: User) -> Booking:
 
             # Everyone else was asked but did not get it. Not a decline: they did
             # nothing wrong and their acceptance rate should not record one.
-            Offer.objects.filter(booking=booking, status=OfferStatus.PENDING).exclude(
+            losing = Offer.objects.filter(booking=booking, status=OfferStatus.PENDING).exclude(
                 pk=offer.pk
-            ).update(
+            )
+            # Read before the update, because after it they no longer match. Only
+            # the ids and their providers, so the list stays small on a broadcast
+            # that went to everybody in a state.
+            losers = list(losing.select_related("provider__user", "booking"))
+
+            losing.update(
                 status=OfferStatus.SUPERSEDED,
                 responded_at=timezone.now(),
                 updated_at=timezone.now(),
@@ -232,6 +265,13 @@ def accept_offer(offer_id, provider: ProviderProfile, actor: User) -> Booking:
                 reason="Offer accepted",
                 metadata={"offer_id": str(offer.pk), "provider_id": str(provider.pk)},
             )
+
+            # Called inside the transaction on purpose. Nothing is handed to a
+            # worker until it commits, so an acceptance that loses the race at the
+            # unique index below tells nobody they won.
+            notifications.offer_resolved(offer, EventType.OFFER_ACCEPTED)
+            for lost in losers:
+                notifications.offer_resolved(lost, EventType.OFFER_SUPERSEDED)
 
     if error is not None:
         raise error

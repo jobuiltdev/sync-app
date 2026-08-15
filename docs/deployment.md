@@ -206,6 +206,26 @@ found and could not safely fix itself. Read it in the morning. `REPAIRED` entrie
 are closed already; `REVIEW` entries are waiting for a person and were
 deliberately not touched.
 
+**Notifications.** `Notifications` is read only. It answers one question:
+was this person told, and what happened to it.
+
+| Status | What it means |
+| --- | --- |
+| `SENT` | The provider accepted it. Delivery to the handset is theirs to confirm |
+| `PENDING` | Queued and not yet attempted, or the worker died before it was |
+| `FAILED` | Attempted and refused, or unreachable for five attempts |
+| `SKIPPED` | Not attempted: that channel is not verified on their account |
+
+`SKIPPED` is the common one and is usually not a fault. Sync will not send a
+booking's details to an unverified phone or email, because an unverified
+destination may belong to somebody else. The fix is for the person to verify the
+channel, not for an operator to force the message.
+
+A run of `FAILED` across many recipients at once is a provider problem: check the
+Termii or Resend dashboard. A run of `PENDING` that never moves means the worker
+is down. There is no resend action, deliberately: the message text is not stored,
+so re-sending would mean rendering from nothing.
+
 ## 8. Incidents
 
 **Payments are not confirming.** Check the Paystack dashboard first. Payments
@@ -218,6 +238,21 @@ reconciling at the same time means the worker or the scheduler is down. Check
 both. If the scheduler has been down, everything catches up on the next tick;
 nothing is lost, because the work is derived from database state rather than from
 queued messages.
+
+Notifications are the exception to that last sentence. Every other task derives
+its work from the database, but a notification's message is rendered from context
+carried on the task itself, so notifications queued while the worker was down are
+lost when the queue is. They show as `PENDING` and stay there. Nothing financial
+or lifecycle-related is affected: the bookings, payments and payouts they describe
+all completed correctly, and only the telling was missed.
+
+**Nobody is receiving messages.** Check `Notifications` first, because the status
+separates the three causes. All `SKIPPED` means the accounts are unverified and
+nothing is broken. All `FAILED` means the provider is refusing us: check the
+Termii or Resend dashboard, and check the account is funded. All `PENDING` means
+the worker is not running. Bookings and payouts continue normally throughout: a
+notification cannot fail a transaction, which is why an outage here is a customer
+service problem rather than an incident.
 
 **The database is unreachable.** Readiness goes red and instances leave the load
 balancer; liveness stays green so nothing restart-loops. No data is at risk. When
@@ -273,11 +308,17 @@ it is the limit people hit first on managed PostgreSQL.
 
 ## 10. What is not ready
 
-Honest list, as of M7.
+Honest list, as of M8-FINAL.
 
 - **No provider account is configured.** No real payment, SMS, email or transfer
   has ever been made by this system. Every adapter exists and every one is
-  exercised against a deterministic fake.
+  exercised against a deterministic fake. That now includes every marketplace
+  notification: they have been delivered end to end against the fakes and never
+  through Termii or Resend.
+- **No push notifications.** SMS and email carry everything. A provider without a
+  verified phone number hears about a job only by opening the app.
+- **No notification preferences.** Everybody who has verified a channel receives
+  what the policy routes to it, and there is no way to turn a category off.
 - **No deployment has happened.** This document describes what the code requires.
   It has not been run on a hosting platform.
 - **CI has never started.** See the CI section of `README.md`.

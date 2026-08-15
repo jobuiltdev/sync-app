@@ -26,7 +26,7 @@ TIMEOUT_SECONDS = 20
 
 
 class TermiiSMSProvider(SMSProvider):
-    """Sends verification codes through Termii.
+    """Sends messages through Termii.
 
     Configured entirely from the environment. Constructing this without an API
     key fails immediately rather than at the first message, so a deployment that
@@ -45,7 +45,7 @@ class TermiiSMSProvider(SMSProvider):
         if not self.api_key:
             raise SMSDeliveryError("TERMII_API_KEY is not set. Termii cannot send without it.")
 
-    def send_verification_code(self, phone: str, code: str) -> None:
+    def send(self, phone: str, message: str) -> None:
         # Termii wants the number without a leading plus.
         destination = phone[1:] if phone.startswith("+") else phone
 
@@ -53,10 +53,7 @@ class TermiiSMSProvider(SMSProvider):
             {
                 "to": destination,
                 "from": self.sender_id,
-                "sms": (
-                    f"{code} is your Sync verification code. "
-                    "It expires shortly. Do not share it with anyone."
-                ),
+                "sms": message,
                 "type": "plain",
                 "channel": self.channel,
                 "api_key": self.api_key,
@@ -91,5 +88,6 @@ class TermiiSMSProvider(SMSProvider):
             )
 
         # The id, the destination and nothing else. A delivery record is worth
-        # having when somebody says a code never arrived; the code itself is not.
-        logger.info("Termii accepted a verification message %s for %s", message_id, destination)
+        # having when somebody says a message never arrived; its contents are not,
+        # whether that is a verification code or a customer's booking details.
+        logger.info("Termii accepted message %s for %s", message_id, destination)

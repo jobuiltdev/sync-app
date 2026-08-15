@@ -28,6 +28,8 @@ from apps.accounts.models import User
 from apps.accounts.sms.locmem import LocMemSMSProvider
 from apps.bookings.state import BookingStatus
 from apps.catalog.tests.factories import make_service
+from apps.notifications.events import EventType
+from apps.notifications.models import DeliveryStatus, Notification
 from apps.payments.banks.fake import FakeBankResolver
 from apps.payments.gateways.fake import FakeGateway
 from apps.payments.intents import PaymentIntent
@@ -53,9 +55,23 @@ def sign(body: bytes) -> str:
     ).hexdigest()
 
 
+def _events(user: User) -> set:
+    return set(Notification.objects.filter(recipient=user).values_list("event_type", flat=True))
+
+
+def _sms_bodies() -> list[str]:
+    return [message.body for message in LocMemSMSProvider.messages]
+
+
 @override_settings(
     SMS_BACKEND="apps.accounts.sms.locmem.LocMemSMSProvider",
     EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    # Declared rather than inherited. This runs under whichever settings module
+    # the runner loaded, and the notification assertions at the end need delivery
+    # to happen in this process: against a real broker with no worker, every
+    # message would sit queued and the test would be asserting on nothing.
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
 )
 class EndToEndTests(TransactionTestCase):
     """One customer, one provider, one job, one payout."""
@@ -373,6 +389,54 @@ class EndToEndTests(TransactionTestCase):
 
         # Nothing anywhere in that exchange handed a client an account number.
         self.assertNotIn("0123456789", str(confirmed_account.json()))
+
+        # 22. Both people were told what happened, all the way through.
+        #
+        # This runs in a TransactionTestCase, so `on_commit` actually fires and
+        # every message above was rendered and handed to a provider for real
+        # rather than being left as a pending row.
+        self.assertEqual(
+            _events(customer),
+            {
+                EventType.BOOKING_CREATED,
+                EventType.PROVIDER_ASSIGNED,
+                EventType.PAYMENT_SUCCEEDED,
+                EventType.BOOKING_IN_PROGRESS,
+                EventType.BOOKING_AWAITING_CONFIRMATION,
+                EventType.BOOKING_COMPLETED,
+            },
+        )
+        self.assertEqual(
+            _events(provider_user),
+            {
+                EventType.OFFER_RECEIVED,
+                EventType.OFFER_ACCEPTED,
+                EventType.EARNINGS_AVAILABLE,
+                EventType.PAYOUT_REQUESTED,
+                EventType.PAYOUT_PROCESSING,
+                EventType.PAYOUT_PAID,
+            },
+        )
+
+        # Every one of them actually went out. A `PENDING` row here would mean
+        # the path is wired but nothing reaches anybody.
+        self.assertFalse(
+            Notification.objects.exclude(status=DeliveryStatus.SENT).exists(),
+            list(
+                Notification.objects.exclude(status=DeliveryStatus.SENT).values_list(
+                    "event_type", "status", "failure_reason"
+                )
+            ),
+        )
+
+        # And nobody was sent anybody else's news.
+        for notification in Notification.objects.all():
+            self.assertIn(notification.recipient_id, {customer.pk, provider_user.pk})
+
+        # The provider was told where the job was, and never the street address.
+        offers = [body for body in _sms_bodies() if "Victoria Island" in body]
+        self.assertTrue(offers)
+        self.assertNotIn("Adeola Odeku", " ".join(_sms_bodies()))
 
 
 @override_settings(

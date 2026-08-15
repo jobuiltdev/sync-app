@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     "apps.providers",
     "apps.bookings",
     "apps.payments",
+    "apps.notifications",
 ]
 
 MIDDLEWARE = [

@@ -28,6 +28,8 @@ from django.utils import timezone
 
 from apps.accounts import policy
 from apps.bookings.state import ActorType, BookingStatus
+from apps.notifications import service as notifications
+from apps.notifications.events import EventType
 from apps.payments.destinations import PayoutDestination
 from apps.payments.errors import (
     BankLookupFailed,
@@ -57,6 +59,16 @@ from apps.providers.models import ProviderProfile
 if TYPE_CHECKING:
     from apps.accounts.models import User
     from apps.bookings.models import Booking
+
+#: Which payout statuses are worth a message. REQUESTED is not here because it is
+#: announced by `request_payout` itself, which is the only thing that creates one;
+#: CANCELLED is not, because a provider who cancelled their own payout does not
+#: need to be told they did.
+PAYOUT_EVENTS: dict[str, str] = {
+    PayoutStatus.PROCESSING: EventType.PAYOUT_PROCESSING,
+    PayoutStatus.PAID: EventType.PAYOUT_PAID,
+    PayoutStatus.FAILED: EventType.PAYOUT_FAILED,
+}
 
 
 def commission_rate_bps() -> int:
@@ -145,7 +157,7 @@ def create_settlement(booking: Booking) -> BookingSettlement:
             # A savepoint, so that losing the race leaves the surrounding
             # transaction usable instead of poisoned.
             with transaction.atomic():
-                return BookingSettlement.objects.create(
+                settlement = BookingSettlement.objects.create(
                     booking=locked,
                     provider_id=locked.provider_id,
                     gross_amount_kobo=split.gross_kobo,
@@ -155,6 +167,14 @@ def create_settlement(booking: Booking) -> BookingSettlement:
                     currency=Currency.NGN,
                     status=SettlementStatus.PAYABLE,
                 )
+
+            # Only the caller that actually wrote the settlement tells anybody.
+            # The early return above and the IntegrityError below both mean
+            # somebody else already did, and money becoming available is news
+            # exactly once.
+            notifications.earnings_available(settlement)
+
+            return settlement
         except IntegrityError:
             # Somebody committed one between the read above and this write. Their
             # row is as good as ours would have been.
@@ -392,13 +412,20 @@ def request_payout(
 
         try:
             with transaction.atomic():
-                return PayoutRequest.objects.create(
+                payout = PayoutRequest.objects.create(
                     provider=locked,
                     amount_kobo=amount_kobo,
                     currency=Currency.NGN,
                     status=PayoutStatus.REQUESTED,
                     idempotency_key=idempotency_key,
                 )
+
+            # A receipt for money that has left their available balance. The
+            # replay path above returns without this, so a request retried over a
+            # bad connection is acknowledged once.
+            notifications.payout_status(payout, EventType.PAYOUT_REQUESTED)
+
+            return payout
         except IntegrityError as exc:
             # The in-flight index fired. Another request committed first, and this
             # one must not become a second claim on the same earnings.
@@ -451,6 +478,15 @@ def transition_payout(
         updated.append("failure_reason")
 
     payout.save(update_fields=updated)
+
+    # Every payout status a provider would want to hear about, told in one place,
+    # because every route to a payout status change goes through here. Putting it
+    # on each caller would mean the admin action, the execution path and
+    # reconciliation each needing to remember.
+    event = PAYOUT_EVENTS.get(target)
+    if event is not None:
+        notifications.payout_status(payout, event)
+
     return payout
 
 

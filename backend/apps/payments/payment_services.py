@@ -22,6 +22,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.bookings.state import BookingStatus
+from apps.notifications import service as notifications
 from apps.payments.errors import (
     BookingNotPayable,
     PaymentAmountMismatch,
@@ -259,6 +260,11 @@ def _apply(intent: PaymentIntent, reported: GatewayPayment) -> PaymentOutcome:
         from apps.payments.services import settle_if_ready
 
         settle_if_ready(intent.booking)
+
+    # Only where the status actually moved. A late webhook that changed nothing
+    # returned above, so nobody is told twice about the same payment, and the
+    # deduplication key would refuse it even if they were.
+    notifications.payment_resolved(intent, succeeded=intent.is_successful)
 
     return PaymentOutcome(intent=intent, changed=True, detail=intent.status)
 

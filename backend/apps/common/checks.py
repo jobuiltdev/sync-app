@@ -32,8 +32,14 @@ PROVIDER_SETTINGS = {
     "PAYMENT_GATEWAY": "customers would be told they had paid while no money moved",
     "BANK_RESOLVER": "payout accounts would be confirmed without any bank being asked",
     "PAYOUT_TRANSFER_PROVIDER": "payouts would be marked sent while no money left",
-    "SMS_BACKEND": "verification codes would be printed to a log instead of sent",
-    "EMAIL_BACKEND": "verification emails would be printed to a log instead of sent",
+    "SMS_BACKEND": (
+        "verification codes and job offers would be printed to a log instead of sent, "
+        "so nobody could sign up and no provider would hear about work"
+    ),
+    "EMAIL_BACKEND": (
+        "verification emails and every booking, payment and payout notice would be "
+        "printed to a log instead of sent"
+    ),
 }
 
 #: Credentials that must be present, keyed by the provider path that needs them.

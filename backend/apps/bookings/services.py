@@ -17,6 +17,11 @@ from apps.bookings.models import Booking, BookingStatusEvent
 from apps.bookings.state import ActorType, BookingStatus, actors_for, is_allowed, targets_from
 from apps.catalog.models import Service
 from apps.common.exceptions import APIError
+
+# The whole of this module's contact with messaging. It knows that something
+# happened and who it happened to; which channels that reaches, what the message
+# says and whether it arrived are entirely the notifications app's business.
+from apps.notifications import service as notifications
 from apps.providers.models import ProviderProfile
 
 if TYPE_CHECKING:
@@ -134,7 +139,35 @@ def transition(
 
             settle_if_ready(booking)
 
+    # Inside the function but outside the atomic block, so a transition that
+    # rolled back tells nobody anything. Every call here is a side effect: none of
+    # them can raise, and none of them is read back.
+    _announce(booking, target)
+
     return booking
+
+
+def _announce(booking: Booking, target: str) -> None:
+    """Tells whoever this status change concerns, if anybody.
+
+    Kept apart from `transition` because it is not part of the lifecycle. The
+    lifecycle table decides what may happen; this decides who hears about it, and
+    conflating the two would put message routing inside a state machine.
+    """
+    if target == BookingStatus.ASSIGNED:
+        # The one a customer is actually waiting for.
+        notifications.provider_assigned(booking)
+        return
+
+    if target == BookingStatus.CANCELLED:
+        # The provider, not the customer. A customer who cancelled their own
+        # booking does not need a message saying so, and a booking cancelled
+        # before anybody took it has no provider to tell.
+        if booking.provider_id:
+            notifications.job_cancelled(booking)
+        return
+
+    notifications.booking_status_changed(booking, target)
 
 
 @transaction.atomic
@@ -194,5 +227,10 @@ def create_booking(
     )
 
     dispatch_offers(booking, direct_provider=provider)
+
+    # Telling the customer is a side effect of the booking, not part of it. This
+    # queues nothing until the transaction commits and swallows its own failures,
+    # so a booking cannot fail because a message could not be composed.
+    notifications.booking_created(booking)
 
     return booking

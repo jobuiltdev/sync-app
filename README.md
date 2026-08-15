@@ -224,7 +224,8 @@ sync-v1/
 │   │   ├── urls.py
 │   │   └── api_v1.py       everything mounted under /api/v1/
 │   ├── apps/
-│   │   └── common/         base model, error envelope, health endpoint
+│   │   ├── common/         base model, error envelope, health endpoint
+│   │   └── notifications/  what people are told, and how it got to them
 │   └── pyproject.toml      dependencies and tool configuration
 ├── mobile/
 │   ├── app/                expo-router routes
@@ -285,6 +286,33 @@ Exactly one scheduler, ever. Several workers is fine. Both need Redis, which
 | `reconcile_payouts` | 5m | Resolves transfers whose outcome was never received |
 | `retire_stale_challenges` | 1h | Retires verification challenges that can no longer be used |
 | `sweep_financial_consistency` | 1h | Finds impossible financial states, repairs only the unambiguous |
+| `deliver_notification` | on demand | Sends one message, retrying only what is worth retrying |
+
+Without a worker, nothing is told to anybody. Bookings, payments and payouts all
+still work correctly, because a notification is a side effect and never a source
+of truth, but a provider will only find out about a job by opening the app.
+
+## Notifications
+
+Sync tells people what happened to their bookings, payments and payouts over the
+same SMS and email providers verification uses. `docs/architecture.md` has the
+full account; the parts worth knowing before touching any of it:
+
+- **Domain code never names a vendor.** A booking service calls
+  `notifications.booking_created(booking)`. Whether that becomes an SMS, an email
+  or nothing is decided in `apps/notifications/`, and a test fails if `termii`,
+  `resend` or `send_mail` appears in a lifecycle module.
+- **A notification cannot fail a booking.** Everything is caught, including the
+  queueing, and delivery is scheduled with `transaction.on_commit` so a rolled
+  back transaction sends nothing.
+- **A channel is only used when it is verified.** Sending a customer's address to
+  an unverified number could hand it to a stranger. Those messages are recorded
+  `SKIPPED` rather than dropped, so it is visible.
+- **No message text is stored.** The row records the event, the recipient and the
+  outcome. The message can be rendered again from the domain object.
+
+Locally the console SMS provider and the console email backend print instead of
+sending, so the whole path is exercisable with no account anywhere.
 
 ## Health
 

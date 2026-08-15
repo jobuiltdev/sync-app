@@ -891,17 +891,108 @@ themselves, and the client has no path that would let them try.
 and the job screen exposes exactly the transitions the server permits for the
 actor making the request.
 
-#### Deferred from M8
+### Notifications, as implemented in M8-FINAL
 
-**Event notifications.** Sync has both delivery channels, an SMS provider and an
-email backend, and both are used for verification. What it does not have is
-anything that reaches for them when a booking is accepted, a payment succeeds or
-a payout fails. That work is a domain of its own: what to send, on which
-transition, to whom, how a person turns it off, and how a delivery failure is
-recorded without becoming a second state machine beside the lifecycle. Building
-half of it would have meant sending some events and silently not others, which is
-worse than sending none. It is the largest remaining gap between this system and
-one a customer would find complete.
+M8 left the largest remaining gap in the system: both delivery channels existed
+and both were used for verification, but nothing reached for them when a booking
+was accepted, a payment succeeded or a payout failed. A provider only learned
+about a job by opening the app, which is not a marketplace.
+
+The whole path is one direction, and it only goes one way:
+
+```
+domain event -> notify() -> channel policy -> Notification row
+                                                    |
+                                          transaction.on_commit
+                                                    |
+                                            Celery: deliver_notification
+                                                    |
+                                       SMSProvider / Django EMAIL_BACKEND
+                                                    |
+                                          SENT | FAILED | SKIPPED
+```
+
+```
+backend/apps/notifications/
+├── events.py     EventType, Channel, CHANNEL_POLICY: what exists and where it goes
+├── messages.py   what each message says, and nothing about how it is sent
+├── models.py     Notification: delivery state, and no business meaning at all
+├── service.py    notify() and the domain-facing helpers. The whole public surface
+├── delivery.py   the only module that talks to a channel
+└── tasks.py      bounded-retry delivery on the existing queue
+```
+
+**A notification is a side effect and never a source of truth.** No booking, no
+settlement and no payout reads this table, and if it were dropped entirely every
+one of them would still be correct. Nothing in the domain branches on whether a
+message arrived.
+
+**A notification can never break the thing that caused it.** `notify()` catches
+everything it can raise and logs it. The subtle one is the queueing: delivery is
+scheduled with `transaction.on_commit`, and an `on_commit` callback runs after
+the commit but still on the caller's stack, so a broker that is down would surface
+inside a booking that has already succeeded. That call is guarded too. The cost of
+messaging being unavailable is an undelivered message and a log line.
+
+**Nothing is queued for a transaction that rolled back.** Without `on_commit`, a
+booking that failed after the notification point would still have told the
+customer it succeeded.
+
+**Sending twice is impossible rather than unlikely.** Every message carries a
+`dedupe_key` of event, subject, channel and recipient, and the column is unique.
+A retried task, a redelivered webhook and two workers racing all produce the same
+string, and the database keeps one. This is the same shape as every other
+idempotency guarantee in the system: the constraint is the promise, not the check
+above it.
+
+**A channel is only used when that channel is verified.** This is the security
+decision in the app. An unverified phone number is a number somebody typed, and
+it may well be somebody else's: sending a customer's address, a provider's name
+or an amount to it would hand a stranger the details of a real booking. A message
+with no verified destination is recorded `SKIPPED` rather than dropped, so
+"why did they never hear about the job" has an answer. Verification codes are
+exempt and do not travel through this app at all, because proving a destination
+is exactly what they are for.
+
+**No message body is stored.** A rendered message contains an address, a provider
+name and an amount; a column for it would build a second copy of precisely what
+the rest of the system is careful with. The row holds the event, the recipient,
+the domain object and the delivery outcome. The context needed to render travels
+with the Celery task and exists only for as long as the delivery.
+
+**SMS is rationed.** It costs money per message and interrupts somebody's day, so
+it is reserved for what must be acted on soon or would be wanted while away from
+the app: a job offer, a provider on the way, a request to confirm, a failed
+payment, a cancelled job, a payout resolved. Everything else is email. The list is
+pinned in a test as an explicit set, so widening it is a deliberate edit.
+
+**A failure is classified before it is retried.** A provider being unreachable is
+temporary and worth another attempt; a provider refusing the message is permanent,
+and retrying it sends the same message to the same bad address four more times and
+pays for each. Attempts are bounded at five, counted on the row rather than in
+Celery so the count survives a worker restart, and an exhausted message is
+recorded rather than retried forever.
+
+**No vendor is reachable from lifecycle code.** Booking, payment and payout
+modules call `notifications.booking_created(...)` and its siblings, and know
+nothing about SMS, email, Termii or Resend. A test reads those modules and fails
+if any of those names appears in them.
+
+#### What this deliberately is not
+
+Not push notifications, which need device tokens and a registration lifecycle.
+Not a notification centre or an in-app inbox, which would make this table
+something the app reads and therefore something the domain owes a contract to.
+Not per-user preferences, which need a settings surface to be meaningful. Not a
+second event bus: `notify()` is a function call from the service that already
+knows what happened.
+
+One gap is recorded rather than papered over. A worker killed between a row being
+written and its task being acknowledged leaves a `PENDING` row with nothing coming
+for it. Re-driving it would need the context that was deliberately not stored, and
+a message rendered from an empty context is worse than no message, so those rows
+are visible in the admin and are not swept. If that becomes common the answer is
+to store the context, not to send an empty message.
 
 
 ### How verticals stay modular
@@ -944,10 +1035,11 @@ modification.
 | Payouts | Paystack Transfers | `payments/transfers/base.py`, not built |
 | Transactional email | Resend | Django's `EMAIL_BACKEND`, `accounts/email/` |
 | SMS | Termii | `accounts/sms/base.py` |
+| Marketplace notifications | the two above | `notifications/service.py`, one entry point |
 | Identity verification | Prembly, Youverify or VerifyMe | `providers/identity/base.py`, not built |
 | Bank account resolution | Paystack | `payments/banks/base.py` |
 | Google sign-in | ID token verified with `google-auth` | `accounts/social/google.py` |
-| Push | Expo Push | `notifications/push/base.py` |
+| Push | Expo Push | not built. SMS and email carry everything today |
 | Media and documents | S3 compatible, private ACL | django-storages |
 | Background work | Celery with Redis | offers, payouts, webhooks, notifications |
 
@@ -1389,6 +1481,17 @@ general machine before the case that needs it would be guessing at the shape of 
 case. What M5 has instead is a settlement per completed booking and a balance summed
 from immutable rows, which is enough for money owed and not yet enough for money in
 two directions.
+
+### notifications
+
+Built in M8-FINAL:
+
+- **Notification**: `event_type`, `channel` (SMS / EMAIL), `recipient`,
+  `subject_type`, `subject_id`, `subject_reference`, `status` (PENDING / SENT /
+  FAILED / SKIPPED), `dedupe_key` (unique), `attempts`, `failure_reason`,
+  `queued_at`, `delivered_at`. There is no message body column and no destination
+  column, by design: the row records that somebody was contacted and what became
+  of it, not what they were told or where
 
 ### reviews and disputes
 

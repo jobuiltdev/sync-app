@@ -1,17 +1,14 @@
-import logging
-
 from apps.accounts.sms.base import SMSProvider
-
-logger = logging.getLogger(__name__)
 
 
 class ConsoleSMSProvider(SMSProvider):
-    """Development provider. Prints the code to the console and sends nothing.
+    """Development provider. Prints the message to the console and sends nothing.
 
     Writes to stdout rather than the logger on purpose: logs get shipped and
-    retained, and a verification code should not end up in a log aggregator. This
-    provider is the development default and is never the production setting.
+    retained, and neither a verification code nor a customer's booking details
+    should end up in a log aggregator. This provider is the development default
+    and is never the production setting.
     """
 
-    def send_verification_code(self, phone: str, code: str) -> None:
-        print(f"\n[sms] verification code for {phone}: {code}\n")
+    def send(self, phone: str, message: str) -> None:
+        print(f"\n[sms] to {phone}: {message}\n")

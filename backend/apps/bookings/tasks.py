@@ -19,6 +19,8 @@ from django.utils import timezone
 from apps.bookings.offers import Offer, OfferStatus
 from apps.bookings.state import ActorType, BookingStatus
 from apps.common.tasks import batched, safe_task
+from apps.notifications import service as notifications
+from apps.notifications.events import EventType
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +80,7 @@ def _expire_one(offer_id) -> object | None:
     with transaction.atomic():
         offer = (
             Offer.objects.select_for_update()
+            .select_related("provider__user", "booking__service")
             .filter(pk=offer_id, status=OfferStatus.PENDING)
             .first()
         )
@@ -92,6 +95,11 @@ def _expire_one(offer_id) -> object | None:
         offer.status = OfferStatus.EXPIRED
         offer.responded_at = timezone.now()
         offer.save(update_fields=["status", "responded_at", "updated_at"])
+
+        # So a provider's job list and their phone agree about what is still
+        # open. Inside the lock, and therefore inside the transaction, so a run
+        # that rolls back tells nobody a job closed when it did not.
+        notifications.offer_resolved(offer, EventType.OFFER_EXPIRED)
 
         return offer.booking_id
 
