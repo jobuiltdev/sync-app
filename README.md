@@ -54,7 +54,15 @@ python -m venv .venv
 # source .venv/bin/activate    # macOS and Linux
 pip install -e ".[dev]"
 python manage.py migrate
+python manage.py seed_catalog
 ```
+
+`seed_catalog` creates the six service categories and everything bookable under
+them. Without it the catalog is empty and the app has nothing to show. It is
+idempotent and safe to re-run: it matches on slug and updates in place, so it
+never touches a booking. `--prune` deactivates anything no longer in the seed,
+and deactivates rather than deletes, because bookings hold a foreign key to the
+service they were made for.
 
 ### 4. Mobile
 
@@ -231,10 +239,11 @@ sync-v1/
 │   ├── app/                expo-router routes
 │   └── src/
 │       ├── api/            client, error normalisation, endpoints
-│       ├── components/ui/
-│       ├── lib/            query client, secure storage
+│       ├── components/     ui/ the design system, navigation/ the glass tab bar
+│       ├── features/       domain hooks and pure presentation logic
+│       ├── lib/            query client, secure storage, money
 │       ├── state/          session store
-│       └── theme/          design tokens
+│       └── theme/          tokens, palettes, ThemeProvider
 ├── docs/architecture.md
 ├── docker-compose.yml
 └── .github/workflows/
@@ -243,26 +252,62 @@ sync-v1/
 ## The app
 
 One Expo app, both roles. A provider is often also a customer, and one app lets a
-person switch without reinstalling, which is why the provider surfaces sit beside
-the customer ones on the home screen rather than behind a separate login.
+person switch without reinstalling, which is why the provider surfaces sit inside
+the same navigation rather than behind a separate login.
+
+**Three destinations, and deliberately no more.**
+
+| Tab | For |
+| --- | --- |
+| `home` | Discovery. A greeting, anything happening now, then the catalog |
+| `activity` | Everything in motion: your bookings, and your offers and jobs if you are a provider |
+| `profile` | The account and everything you visit occasionally |
+
+Addresses, payments, earnings, the provider profile and appearance were all
+candidates for a tab. Each is a place you go with a purpose, not a place you
+live, so they sit behind Profile. Everything else is pushed over the tab bar:
 
 | Screen | For |
 | --- | --- |
-| `home` | Browse the catalog, and every entry point below |
-| `book/[slug]`, `bookings`, `booking/[id]` | Request a service, then follow it |
+| `book/[slug]`, `booking/[id]` | Request a service, then follow it |
 | `addresses` | Where work happens. The landmark matters more than the street |
 | `verify-phone` | Both channels, phone and email |
 | `pay/[id]` | Hosted checkout, then ask the server what happened |
 | `provider` | Become a provider, list services and areas, take work on or off |
-| `offers`, `offer/[id]` | Jobs offered to you, accept or decline |
-| `jobs`, `job/[id]` | Work you took, and moving it forward |
+| `offer/[id]`, `job/[id]` | Answer an offer, and move a job you took forward |
 | `earnings`, `payouts`, `payout/[id]`, `payout-request` | What you earned and getting paid |
 | `payout-destination` | Your bank account, confirmed with the bank |
+| `appearance` | Light, dark or follow the device |
 
 Two rules the app holds to. It renders what the server says is possible, reading
 `allowed_transitions` and capability refusals rather than deciding for itself; and
 it never computes money, because a balance the app worked out is a balance that
 disagrees with the server the moment another device does anything.
+
+## Look and feel
+
+The visual direction is **warm, confident, modern, extremely clean**, and it
+lives in `src/theme/tokens.ts` rather than in individual screens.
+
+- **Warm neutrals.** Every grey has a red and yellow bias, so backgrounds read as
+  paper rather than aluminium. Light mode's ground is off-white, which is what
+  lets a white card look raised without a shadow.
+- **One accent.** A burnt sienna carries every action in the app. Nothing else
+  competes with it.
+- **Type, not boxes.** Hierarchy comes from the type scale. Screens never pick a
+  font size: text goes through `<Text variant="...">`.
+- **Three themes.** System, light and dark, persisted. Dark mode is designed
+  rather than inverted, with its own lighter accent.
+- **A glass bottom bar.** Inset and floating, lightly blurred with a warm tint
+  over it, via `expo-blur`. Content scrolls visibly past it on both sides, which
+  is what makes it read as glass instead of as a footer.
+
+Every colour pair in both palettes is checked against WCAG AA at 4.5:1. Status is
+never carried by colour alone: every pill has a written label, and live states
+carry a dot as well as a hue.
+
+`docs/architecture.md` has the full account, including why the icons are drawn
+in-repo instead of using an icon font.
 
 ## Background work
 

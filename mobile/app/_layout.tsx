@@ -8,7 +8,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { setAccessTokenProvider, setTokenRefresher } from '@/api/client';
 import { createQueryClient } from '@/lib/query-client';
 import { getAccessToken, renewSession, useSessionStore } from '@/state/session';
-import { colors } from '@/theme/tokens';
+import { ThemeProvider, useTheme } from '@/theme/theme';
 
 // Registered at module scope so the API layer is wired before any request can be
 // made, including one fired by a screen that mounts on the very first frame.
@@ -29,21 +29,41 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <QueryClientProvider client={queryClient}>
-          <StatusBar style="dark" />
-          <Stack
-            screenOptions={{
-              headerShadowVisible: false,
-              headerStyle: { backgroundColor: colors.ground },
-              headerTintColor: colors.ink,
-              contentStyle: { backgroundColor: colors.ground },
-            }}
-          >
-            <Stack.Screen name="index" options={{ headerShown: false }} />
-            <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-            <Stack.Screen name="(app)" options={{ headerShown: false }} />
-          </Stack>
+          {/* Above the navigator, so every screen and every modal resolves the
+              same palette and a theme change repaints all of them at once. */}
+          <ThemeProvider>
+            <ThemedNavigator />
+          </ThemeProvider>
         </QueryClientProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
+  );
+}
+
+/**
+ * Separated so it can call `useTheme`, which is only available below the
+ * provider. It also owns the status bar: the bar's content colour has to invert
+ * with the scheme or it disappears into the background in one of the two modes.
+ */
+function ThemedNavigator() {
+  const { palette, scheme } = useTheme();
+
+  return (
+    <>
+      <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: palette.ground },
+          // Screens are written with their own header, so the platform default
+          // slide is all that is wanted here.
+          animation: 'slide_from_right',
+        }}
+      >
+        <Stack.Screen name="index" />
+        <Stack.Screen name="(auth)" />
+        <Stack.Screen name="(app)" />
+      </Stack>
+    </>
   );
 }

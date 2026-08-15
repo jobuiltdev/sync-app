@@ -1263,18 +1263,21 @@ switch without reinstalling.
 ```
 mobile/
 ├── app/                     routes only, thin. Screens compose features
-│   ├── _layout.tsx          providers, fonts, session gate
-│   ├── (auth)/
-│   ├── (customer)/
-│   └── (provider)/
+│   ├── _layout.tsx          providers, theme, session gate
+│   ├── (auth)/              welcome, login, register
+│   └── (app)/
+│       ├── (tabs)/          home, activity, profile
+│       └── ...              everything else, pushed over the tab bar
 └── src/
-    ├── api/                 client, generated types, endpoints per domain
-    ├── features/            auth, verification, catalog, booking, tracking, wallet
-    ├── components/ui/       Button, Card, Sheet, Field, Skeleton, EmptyState,
-    │                        ErrorState, Money, StatusPill, VerificationGate
-    ├── theme/               tokens, typography, spacing, motion
-    ├── lib/                 secure storage, money and phone format, analytics
-    └── state/               session store, active-booking store
+    ├── api/                 client, endpoints per domain, error envelope
+    ├── features/            auth, catalog, bookings, offers, payments,
+    │                        providers, activity, status presentation
+    ├── components/
+    │   ├── ui/              the design system
+    │   └── navigation/      the glass tab bar
+    ├── theme/               tokens, palettes, ThemeProvider
+    ├── lib/                 secure storage, money, Nigerian states
+    └── state/               session store
 ```
 
 | Concern | Choice | Reasoning |
@@ -1284,9 +1287,11 @@ mobile/
 | Forms | React Hook Form with Zod | Zod schemas mirror the backend service specs |
 | Types | Generated from OpenAPI | The contract cannot silently drift from the app |
 | Google sign-in | Native sheet, ID token to the API | Needs a dev build and three OAuth client ids |
-| Animation | Reanimated and Haptics | Transitions, sheet physics, status changes |
-| Lists | FlashList | Booking history on low-end Android |
-| Sheets | gorhom/bottom-sheet | Request flow, verification prompts, tracking |
+| Animation | Animated, native driver | Press feedback, sheets, skeletons. Reanimated is present and unused so far |
+| Lists | ScrollView today | FlashList when a list is long enough to need it |
+| Sheets | Modal plus Animated | `components/ui/Sheet`. gorhom/bottom-sheet is not needed for a tap-to-dismiss sheet |
+| Blur | expo-blur | The glass tab bar. A platform effect, not an effect library |
+| Icons | react-native-svg, drawn in-repo | A custom set beats a several-megabyte icon font used fifteen times |
 | Maps | react-native-maps | Dispatch tracking, address pin-drop. Dev build |
 | Secrets | expo-secure-store | Refresh tokens never touch AsyncStorage |
 | Testing | Jest, Testing Library, MSW | Hooks, state machine, gating, critical flows |
@@ -1306,6 +1311,119 @@ require a development build rather than Expo Go, and the first of those forces t
 issue. When a dev build exists the SDK pin is free to move again, and moving it is
 the preferred direction: SDK 54 leaves the project on React Native 0.81 and React
 19.1 while the ecosystem moves on.
+
+### The design system, as implemented in M9
+
+M0 to M8 built a client that worked and looked like an engineering tool: neutral
+greys, a screen of stacked cards, and hierarchy carried by boxes rather than by
+type. M9 is the visual system that turns it into a product. The direction is
+**warm, confident, modern, extremely clean**, and each of those is a decision in
+`src/theme/tokens.ts` rather than a mood:
+
+**Warm** is in the neutrals. Every grey carries a red and yellow bias, so the
+backgrounds read as paper and sand rather than aluminium. Light mode's ground is
+`#FAF7F3`, not white, which is what makes a true white card read as raised
+without a shadow to say so.
+
+**Confident** is the single accent. One burnt sienna carries every action in the
+app, chosen because a marketplace is expected to use blue or emerald and Sync is
+not obliged to. Nothing competes with it, which is what lets it stay quiet and
+still be obvious.
+
+**Modern** is the restraint: hairline borders, one shadow used only by things
+that genuinely float, and hierarchy from the type scale.
+
+**Extremely clean** is scale discipline. Eight spacing steps, five radii, nine
+type sizes, two elevations. A value off the scale is a value somebody picked to
+make one screen look right, and it is how a design system dies.
+
+Every foreground and background pair is checked against WCAG AA at 4.5:1, and the
+palette was adjusted until all twenty-six passed rather than being chosen and
+hoped for.
+
+#### Theme architecture
+
+Three modes, `system` / `light` / `dark`, resolved in `ThemeProvider` and read
+through `useTheme()` or `usePalette()`. The provider sits above the navigator so
+one repaint covers every screen and modal.
+
+**Dark mode is designed, not inverted.** Its ground is a warm near-black so the
+brand does not go grey, its accent is *lighter* than light mode's because a
+saturated sienna is unreadable on dark, and text on the accent flips to a
+near-black because white on light orange fails contrast in exactly the way that
+is easy to miss.
+
+The **preference** is persisted, never the resolved scheme: storing "dark" for
+somebody who chose "system" on a dark phone would pin them to dark the first time
+they switched their device to light. It is kept in the keychain because that is
+the storage this app already has, and adding AsyncStorage for one short string
+would be a dependency for nothing.
+
+#### Navigation
+
+Three destinations: **Home**, **Activity**, **Profile**. Addresses, payments,
+earnings, the provider profile and appearance were all candidates for a tab and
+all rejected: each is a place you go occasionally with a purpose, not a place you
+live. A tab bar earns its space by being what you switch between constantly, and
+six tabs is a menu wearing a tab bar's clothes.
+
+**Activity replaced three screens** — the customer's bookings, the provider's
+jobs and the provider's offer inbox. They were three lists of "work that is
+happening" split by which side of it you were on, and somebody who was both had
+to remember which to open. The provider segment appears only for accounts that
+have a provider profile, so there is one navigation system rather than two.
+
+Everything else is pushed *over* the tab bar in the `(app)` stack, which is the
+arrangement that keeps the bar to three.
+
+#### The glass bottom navigation
+
+The signature detail, and it works because of restraint:
+
+1. **It is inset and floats.** The bar does not span the full width or touch the
+   bottom edge. Content scrolls visibly past it on both sides, which is what
+   sells the material as translucent; a full-bleed bar reads as an opaque footer
+   however much blur is behind it.
+2. **The blur is light and the tint does the work.** Intensity stays low, with a
+   theme-aware translucent fill over it carrying the warmth. A bare platform blur
+   is neutral grey and would drain the palette.
+3. **One hairline, no shadow border.** The edge separates it from content without
+   turning it into a floating card.
+
+`expo-blur` is the implementation. React Native has no blur primitive and no
+package already in this project provides one; `expo-blur` is the Expo SDK's own
+wrapper over the platform effect (`UIVisualEffectView` on iOS, a render-node blur
+on Android 12+ with an automatic solid fallback below it), versioned with SDK 54.
+It adds nothing to the JavaScript render path, and the bar never re-renders on
+scroll because nothing in it derives from scroll position.
+
+Content clearance is computed, not eyeballed: `useTabBarClearance()` adds the bar
+height, its dock gutter and the home indicator, and `Screen` applies it. Getting
+this wrong is invisible on a tall phone and hides the last row on a short one.
+
+#### Conventions
+
+- **Screens never choose a font size or a colour.** Text goes through `<Text>`
+  with a named variant; colour comes from the palette. That single rule is what
+  keeps eleven screens looking like one product.
+- **Rows, not cards.** Most of this app is lists, and a screen of individually
+  bordered cards is the look the direction rules out. Rows grouped in one card
+  with inset hairlines read as a single calm object.
+- **Status is never colour alone.** Every pill pairs a tone with a written label,
+  and live states carry a dot whose presence, not hue, distinguishes them.
+- **Icons are drawn, not imported.** A custom 24-unit stroked set in
+  `components/ui/Icon.tsx`, keyed off the catalog's `icon_key` with a fallback so
+  a seventh category renders without an app release. An icon font would ship
+  megabytes to use fifteen glyphs, and Material icons look like Material.
+  `react-native-svg` is the only dependency this needs.
+- **Lifecycle presentation is centralised and pure.**
+  `features/status/presentation.ts` maps booking, job, offer, payment, payout and
+  verification statuses to a label, tone and explanation, unit-testable without a
+  renderer. It maps *presentation only*: what a user may do still comes from the
+  server's `allowed_transitions`, and putting a decision in that file would be
+  re-implementing the lifecycle on the client.
+- **Never "Something went wrong" when the API said better.** The error envelope
+  carries a human message and a stable code, and `messageFor()` prefers it.
 
 ### Verification handled once
 

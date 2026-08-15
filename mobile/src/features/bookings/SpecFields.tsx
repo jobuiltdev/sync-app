@@ -1,9 +1,11 @@
-import { Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Switch, View } from 'react-native';
 
 import type { DetailsField, DetailsSchema } from '@/api/endpoints/catalog';
 import { Field } from '@/components/ui/Field';
+import { Text } from '@/components/ui/Text';
 import type { SpecValue } from '@/features/bookings/spec-form';
-import { MIN_TOUCH_TARGET, colors, fontSizes, fontWeights, radii, spacing } from '@/theme/tokens';
+import { usePalette } from '@/theme/theme';
+import { MIN_TOUCH_TARGET, radii, spacing } from '@/theme/tokens';
 
 interface SpecFieldsProps {
   schema: DetailsSchema;
@@ -12,8 +14,14 @@ interface SpecFieldsProps {
   onChange: (name: string, value: SpecValue) => void;
 }
 
-/** Renders whatever the service asks for. Nothing here knows about cleaning or
- *  dispatch; a new vertical appears on its own once the API serves its schema. */
+/**
+ * Renders whatever the service asks for.
+ *
+ * Nothing here knows about cleaning or dispatch. The field list is served from
+ * the service's spec, so a seventh vertical appears in the app with no release,
+ * and hard-coding a single service's fields into a screen would give that up for
+ * a slightly prettier form.
+ */
 export function SpecFields({ schema, values, errors, onChange }: SpecFieldsProps) {
   return (
     <View style={styles.group}>
@@ -38,17 +46,21 @@ interface RowProps {
 }
 
 function SpecFieldRow({ field, value, error, onChange }: RowProps) {
+  const palette = usePalette();
   const label = field.required ? field.label : `${field.label} (optional)`;
 
   if (field.type === 'boolean') {
     return (
       <View style={styles.switchRow}>
-        <Text style={styles.switchLabel}>{label}</Text>
+        <Text variant="body" style={styles.switchLabel}>
+          {label}
+        </Text>
         <Switch
           accessibilityLabel={label}
           value={Boolean(value)}
           onValueChange={onChange}
-          trackColor={{ true: colors.accent, false: colors.hairline }}
+          trackColor={{ true: palette.primary, false: palette.hairline }}
+          thumbColor={palette.surface}
         />
       </View>
     );
@@ -57,19 +69,34 @@ function SpecFieldRow({ field, value, error, onChange }: RowProps) {
   if (field.type === 'choice' && field.choices) {
     return (
       <View style={styles.choiceGroup}>
-        <Text style={styles.label}>{label}</Text>
+        <Text variant="footnote" weight="medium" tone="soft">
+          {label}
+        </Text>
         <View style={styles.choices}>
           {field.choices.map((choice) => {
             const selected = value === choice;
+
             return (
               <Pressable
                 key={choice}
                 accessibilityRole="radio"
                 accessibilityState={{ selected }}
+                accessibilityLabel={humanise(choice)}
                 onPress={() => onChange(choice)}
-                style={[styles.choice, selected && styles.choiceSelected]}
+                style={[
+                  styles.choice,
+                  {
+                    backgroundColor: selected ? palette.primarySoft : palette.surface,
+                    borderColor: selected ? palette.primary : palette.hairline,
+                    borderWidth: selected ? 2 : StyleSheet.hairlineWidth * 2,
+                  },
+                ]}
               >
-                <Text style={[styles.choiceText, selected && styles.choiceTextSelected]}>
+                <Text
+                  variant="footnote"
+                  weight={selected ? 'semibold' : 'regular'}
+                  style={{ color: selected ? palette.onPrimarySoft : palette.inkSoft }}
+                >
                   {humanise(choice)}
                 </Text>
               </Pressable>
@@ -77,7 +104,7 @@ function SpecFieldRow({ field, value, error, onChange }: RowProps) {
           })}
         </View>
         {error ? (
-          <Text accessibilityRole="alert" style={styles.error}>
+          <Text variant="caption" tone="danger" accessibilityRole="alert">
             {error}
           </Text>
         ) : null}
@@ -87,6 +114,7 @@ function SpecFieldRow({ field, value, error, onChange }: RowProps) {
 
   if (field.type === 'list') {
     const text = Array.isArray(value) ? value.join(', ') : '';
+
     return (
       <Field
         label={label}
@@ -100,7 +128,8 @@ function SpecFieldRow({ field, value, error, onChange }: RowProps) {
           )
         }
         error={error}
-        placeholder="Separate each one with a comma"
+        hint="Separate each one with a comma"
+        placeholder="Bread, milk, airtime"
       />
     );
   }
@@ -122,11 +151,6 @@ function humanise(choice: string): string {
 
 const styles = StyleSheet.create({
   group: { gap: spacing.lg },
-  label: {
-    fontSize: fontSizes.footnote,
-    fontWeight: fontWeights.medium,
-    color: colors.inkSoft,
-  },
   switchRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -134,7 +158,7 @@ const styles = StyleSheet.create({
     minHeight: MIN_TOUCH_TARGET,
     gap: spacing.md,
   },
-  switchLabel: { fontSize: fontSizes.body, color: colors.ink, flexShrink: 1 },
+  switchLabel: { flexShrink: 1 },
   choiceGroup: { gap: spacing.sm },
   choices: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   choice: {
@@ -142,12 +166,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,
     borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    backgroundColor: colors.surface,
   },
-  choiceSelected: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
-  choiceText: { fontSize: fontSizes.footnote, color: colors.inkSoft },
-  choiceTextSelected: { color: colors.accent, fontWeight: fontWeights.semibold },
-  error: { fontSize: fontSizes.caption, color: colors.danger },
 });

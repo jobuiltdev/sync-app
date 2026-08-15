@@ -1,13 +1,24 @@
 import { api } from '@/api/client';
 import type { Paginated } from '@/api/pagination';
 
+/**
+ * Every status the server can send.
+ *
+ * `MATCHING` and `EXPIRED` were missing here until M9, which mattered more than
+ * it looks: a booking *opens* in MATCHING, so the status a customer saw
+ * immediately after requesting a job fell through the label lookup and rendered
+ * as the raw code. The union now matches `apps.bookings.state.BookingStatus`
+ * exactly.
+ */
 export type BookingStatus =
+  | 'MATCHING'
   | 'ASSIGNED'
   | 'EN_ROUTE'
   | 'IN_PROGRESS'
   | 'AWAITING_CONFIRMATION'
   | 'COMPLETED'
-  | 'CANCELLED';
+  | 'CANCELLED'
+  | 'EXPIRED';
 
 export type ActorType = 'CUSTOMER' | 'PROVIDER' | 'SYSTEM' | 'ADMIN';
 
@@ -135,12 +146,14 @@ export const bookingKeys = {
 };
 
 const STATUS_LABELS: Record<BookingStatus, string> = {
+  MATCHING: 'Finding a provider',
   ASSIGNED: 'Booked',
   EN_ROUTE: 'On the way',
   IN_PROGRESS: 'In progress',
   AWAITING_CONFIRMATION: 'Awaiting your confirmation',
   COMPLETED: 'Completed',
   CANCELLED: 'Cancelled',
+  EXPIRED: 'No provider available',
 };
 
 /** Status codes are for branching; this is what a customer reads. */

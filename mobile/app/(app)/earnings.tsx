@@ -1,205 +1,166 @@
 import { useRouter } from 'expo-router';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { StyleSheet, View } from 'react-native';
 
-import type { Settlement } from '@/api/endpoints/payments';
 import { Button } from '@/components/ui/Button';
+import { DetailList, DetailRow } from '@/components/ui/DetailList';
+import { Header } from '@/components/ui/Header';
+import { ListRow, RowGroup } from '@/components/ui/ListRow';
+import { Screen } from '@/components/ui/Screen';
+import { Skeleton, SkeletonList } from '@/components/ui/Skeleton';
+import { Card, SectionHeader } from '@/components/ui/Surface';
+import { EmptyState, ErrorState } from '@/components/ui/States';
+import { Text } from '@/components/ui/Text';
 import { useEarnings, useSettlements } from '@/features/payments/hooks';
 import { formatNaira } from '@/lib/money';
-import { colors, fontSizes, fontWeights, radii, spacing } from '@/theme/tokens';
+import { spacing } from '@/theme/tokens';
 
 /**
- * What a provider has earned, and what of it they can take out.
+ * What a provider has made.
  *
- * Every figure comes from the server, including the breakdown. The app does no
- * arithmetic on money at all: it has no way to know about a payout requested on
- * another device, so a locally computed balance would be confidently wrong.
+ * **Every figure here is the server's.** The balance is derived there from
+ * immutable settlements and payouts on each request, and this screen renders
+ * exactly what it was given. It does not add anything up: two devices that each
+ * did their own arithmetic would eventually disagree about what can be
+ * withdrawn, and one of them would be wrong at the moment somebody tapped
+ * withdraw.
  */
 export default function EarningsScreen() {
   const router = useRouter();
   const earnings = useEarnings();
   const settlements = useSettlements();
 
-  return (
-    <SafeAreaView style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.header}>
-          <Text style={styles.title}>Earnings</Text>
-        </View>
+  const rows = settlements.data?.results ?? [];
 
-        {earnings.isPending ? (
-          <View style={styles.card}>
-            <ActivityIndicator color={colors.accent} />
-          </View>
-        ) : earnings.error ? (
-          <View style={[styles.card, styles.cardError]}>
-            <Text style={styles.cardTitle}>Could not load your earnings</Text>
-            <Text style={styles.body}>{earnings.error.message}</Text>
-            <Button label="Try again" variant="secondary" onPress={() => earnings.refetch()} />
-          </View>
-        ) : (
-          <>
-            <View style={styles.balanceCard}>
-              <Text style={styles.balanceLabel}>Available to withdraw</Text>
+  return (
+    <Screen
+      refreshing={earnings.isRefetching}
+      onRefresh={() => {
+        void earnings.refetch();
+        void settlements.refetch();
+      }}
+    >
+      <Header onBack={() => router.back()} title="Earnings" />
+
+      {earnings.isPending ? (
+        <Skeleton width="100%" height={180} radius={18} />
+      ) : earnings.error ? (
+        <ErrorState error={earnings.error} onRetry={() => void earnings.refetch()} />
+      ) : (
+        <>
+          <Card>
+            <View style={styles.balance}>
+              <Text variant="overline" tone="muted">
+                Available to withdraw
+              </Text>
               <Text
+                variant="display"
                 accessibilityLabel={`Available to withdraw, ${formatNaira(earnings.data.available_kobo)}`}
-                style={styles.balance}
               >
                 {formatNaira(earnings.data.available_kobo)}
               </Text>
               {earnings.data.reserved_kobo > 0 ? (
-                <Text style={styles.balanceNote}>
-                  {formatNaira(earnings.data.reserved_kobo)} is in a payout already under way.
+                <Text variant="caption" tone="muted">
+                  {formatNaira(earnings.data.reserved_kobo)} is reserved by a payout you have
+                  already requested.
                 </Text>
               ) : null}
             </View>
 
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Where it comes from</Text>
-              <Row label="Completed jobs" value={String(earnings.data.settlement_count)} />
-              <Row label="Customers paid" value={formatNaira(earnings.data.gross_earned_kobo)} />
-              <Row label="Sync commission" value={formatNaira(earnings.data.commission_kobo)} />
-              <Row label="Your share" value={formatNaira(earnings.data.net_earned_kobo)} />
-              <Row label="Already paid out" value={formatNaira(earnings.data.paid_out_kobo)} />
+            <View style={styles.action}>
+              <Button
+                label="Request a payout"
+                icon="bank"
+                disabled={earnings.data.available_kobo <= 0}
+                onPress={() => router.push('/payout-request')}
+              />
+              {earnings.data.available_kobo <= 0 ? (
+                <Text variant="caption" tone="muted" center>
+                  Nothing available yet. Money becomes available when a customer confirms a
+                  job they have paid for.
+                </Text>
+              ) : null}
             </View>
+          </Card>
 
+          <View style={styles.section}>
+            <SectionHeader title="All time" />
+            <Card>
+              <DetailList>
+                <DetailRow
+                  label="Earned before commission"
+                  value={formatNaira(earnings.data.gross_earned_kobo)}
+                />
+                <DetailRow
+                  label="Sync commission"
+                  value={`- ${formatNaira(earnings.data.commission_kobo)}`}
+                />
+                <DetailRow
+                  label="Your earnings"
+                  value={formatNaira(earnings.data.net_earned_kobo)}
+                  emphasis
+                />
+                <DetailRow label="Paid out" value={formatNaira(earnings.data.paid_out_kobo)} />
+                <DetailRow
+                  label="Completed jobs"
+                  value={String(earnings.data.settlement_count)}
+                />
+              </DetailList>
+            </Card>
+          </View>
+        </>
+      )}
+
+      <View style={styles.section}>
+        <SectionHeader
+          title="Job by job"
+          action={
             <Button
-              label="Request a payout"
-              disabled={earnings.data.available_kobo <= 0}
-              onPress={() => router.push('/payout-request')}
-            />
-            <Button
-              label="Payout history"
-              variant="secondary"
+              label="Payouts"
+              variant="ghost"
+              size="compact"
+              fullWidth={false}
               onPress={() => router.push('/payouts')}
             />
-            <Button
-              label="Where you are paid"
-              variant="secondary"
-              onPress={() => router.push('/payout-destination')}
-            />
-          </>
+          }
+        />
+
+        {settlements.isPending ? (
+          <SkeletonList rows={3} showPlate={false} />
+        ) : settlements.error ? (
+          <ErrorState error={settlements.error} onRetry={() => void settlements.refetch()} />
+        ) : rows.length === 0 ? (
+          <EmptyState
+            icon="wallet"
+            title="No earnings yet"
+            body="A job earns once the customer confirms it and their payment has landed."
+          />
+        ) : (
+          <Card padding="none">
+            <RowGroup>
+              {rows.map((settlement) => (
+                <ListRow
+                  key={settlement.id}
+                  title={settlement.service_name}
+                  subtitle={settlement.booking_reference}
+                  meta={`${formatNaira(settlement.gross_amount_kobo)} less ${formatNaira(settlement.commission_amount_kobo)} commission`}
+                  accessibilityLabel={`${settlement.service_name}, you earned ${formatNaira(settlement.provider_amount_kobo)}`}
+                  trailing={
+                    <Text variant="price" tone="success">
+                      {formatNaira(settlement.provider_amount_kobo)}
+                    </Text>
+                  }
+                />
+              ))}
+            </RowGroup>
+          </Card>
         )}
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Completed jobs</Text>
-          {settlements.isPending ? (
-            <View style={styles.card}>
-              <ActivityIndicator color={colors.accent} />
-            </View>
-          ) : settlements.error ? (
-            <View style={styles.card}>
-              <Text style={styles.body}>{settlements.error.message}</Text>
-            </View>
-          ) : settlements.data.results.length === 0 ? (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Nothing yet</Text>
-              <Text style={styles.body}>
-                Finish a job and what it earned you appears here.
-              </Text>
-            </View>
-          ) : (
-            settlements.data.results.map((settlement) => (
-              <SettlementRow key={settlement.id} settlement={settlement} />
-            ))
-          )}
-        </View>
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.row}>
-      <Text style={styles.muted}>{label}</Text>
-      <Text style={styles.rowValue}>{value}</Text>
-    </View>
-  );
-}
-
-function SettlementRow({ settlement }: { settlement: Settlement }) {
-  return (
-    <View style={styles.card}>
-      <View style={styles.rowTop}>
-        <Text style={styles.cardTitle}>{settlement.service_name}</Text>
-        <Text style={styles.amount}>{formatNaira(settlement.provider_amount_kobo)}</Text>
       </View>
-      <Text style={styles.muted}>{settlement.booking_reference}</Text>
-      <Text style={styles.muted}>
-        {formatNaira(settlement.gross_amount_kobo)} paid, less{' '}
-        {formatNaira(settlement.commission_amount_kobo)} commission
-      </Text>
-    </View>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.ground },
-  content: { padding: spacing.xl, gap: spacing.md },
-  header: { gap: spacing.xs, paddingTop: spacing.lg, paddingBottom: spacing.sm },
-  title: {
-    fontSize: fontSizes.title1,
-    fontWeight: fontWeights.bold,
-    color: colors.ink,
-    letterSpacing: -0.5,
-  },
-  balanceCard: {
-    backgroundColor: colors.accentSoft,
-    borderRadius: radii.card,
-    padding: spacing.xl,
-    gap: spacing.xs,
-  },
-  balanceLabel: { fontSize: fontSizes.footnote, color: colors.inkSoft },
-  balance: {
-    fontSize: fontSizes.title1,
-    fontWeight: fontWeights.bold,
-    color: colors.accent,
-    // Money lines up in a column, so tabular figures stop it shifting width.
-    fontVariant: ['tabular-nums'],
-  },
-  balanceNote: { fontSize: fontSizes.footnote, color: colors.inkSoft },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: radii.card,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    padding: spacing.lg,
-    gap: spacing.xs,
-  },
-  cardError: { borderColor: colors.danger, backgroundColor: colors.dangerSoft, gap: spacing.md },
-  cardTitle: { fontSize: fontSizes.callout, fontWeight: fontWeights.semibold, color: colors.ink },
-  body: { fontSize: fontSizes.body, color: colors.inkSoft },
-  muted: { fontSize: fontSizes.footnote, color: colors.inkMuted },
-  section: { gap: spacing.sm, paddingTop: spacing.lg },
-  sectionTitle: {
-    fontSize: fontSizes.callout,
-    fontWeight: fontWeights.semibold,
-    color: colors.ink,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.md,
-    paddingVertical: 2,
-  },
-  rowTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  rowValue: {
-    fontSize: fontSizes.footnote,
-    fontWeight: fontWeights.medium,
-    color: colors.ink,
-    fontVariant: ['tabular-nums'],
-  },
-  amount: {
-    fontSize: fontSizes.body,
-    fontWeight: fontWeights.semibold,
-    color: colors.accent,
-    fontVariant: ['tabular-nums'],
-  },
+  balance: { gap: spacing.xs },
+  action: { marginTop: spacing.lg, gap: spacing.sm },
+  section: { gap: spacing.md },
 });

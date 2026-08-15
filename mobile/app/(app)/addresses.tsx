@@ -1,191 +1,94 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { StyleSheet, View } from 'react-native';
 
 import type { Address } from '@/api/endpoints/addresses';
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
+import { Header } from '@/components/ui/Header';
+import { Icon } from '@/components/ui/Icon';
+import { ListRow, RowGroup } from '@/components/ui/ListRow';
+import { Pill } from '@/components/ui/Pill';
+import { Screen } from '@/components/ui/Screen';
+import { Sheet } from '@/components/ui/Sheet';
+import { SkeletonList } from '@/components/ui/Skeleton';
+import { Card, SectionHeader } from '@/components/ui/Surface';
+import { EmptyState, ErrorState, InlineError } from '@/components/ui/States';
+import { Text } from '@/components/ui/Text';
 import { useAddresses, useCreateAddress, useDeleteAddress } from '@/features/catalog/hooks';
 import { NIGERIAN_STATES, stateLabel } from '@/lib/nigeria';
-import { colors, fontSizes, fontWeights, radii, spacing } from '@/theme/tokens';
+import { usePalette } from '@/theme/theme';
+import { spacing } from '@/theme/tokens';
 
 /**
- * Where a customer's work happens.
+ * Where work happens.
  *
- * The landmark is prominent rather than optional, and the API requires it, for a
- * reason particular to here: Nigerian street addresses are frequently unusable
- * and a landmark is what a provider actually navigates by.
- *
- * A booking copies the address it was made with rather than pointing at it, so
- * editing or deleting one of these never rewrites the history of a job that has
- * already happened.
+ * **The landmark is not secondary here.** Street addressing in much of Nigeria
+ * is unreliable or absent, and a provider finds a place by "opposite the Eko
+ * Hotel gate" far more often than by a house number. So the landmark is required
+ * by the API, and this screen gives it equal visual weight rather than treating
+ * it as an optional extra line.
  */
 export default function AddressesScreen() {
   const router = useRouter();
   const addresses = useAddresses();
-  const create = useCreateAddress();
   const remove = useDeleteAddress();
-
-  const [street, setStreet] = useState('');
-  const [landmark, setLandmark] = useState('');
-  const [area, setArea] = useState('');
-  const [lga, setLga] = useState('');
-  const [state, setState] = useState('LAGOS');
-  const [directions, setDirections] = useState('');
   const [adding, setAdding] = useState(false);
 
   const saved = addresses.data?.results ?? [];
-  const complete = street.trim().length > 0 && landmark.trim().length > 0;
-
-  const submit = () => {
-    if (!complete) return;
-
-    create.mutate(
-      {
-        street_address: street.trim(),
-        landmark: landmark.trim(),
-        area: area.trim(),
-        lga: lga.trim(),
-        state,
-        directions_note: directions.trim(),
-        is_default: saved.length === 0,
-      },
-      {
-        onSuccess: () => {
-          setStreet('');
-          setLandmark('');
-          setArea('');
-          setLga('');
-          setDirections('');
-          setAdding(false);
-        },
-      },
-    );
-  };
 
   return (
-    <SafeAreaView style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <View style={styles.header}>
-          <Text style={styles.title}>Your addresses</Text>
-          <Text style={styles.muted}>Where a provider comes to do the work.</Text>
-        </View>
-
-        {addresses.isPending ? (
-          <View style={styles.card}>
-            <ActivityIndicator color={colors.accent} />
-          </View>
-        ) : addresses.error ? (
-          <View style={[styles.card, styles.cardError]}>
-            <Text style={styles.cardTitle}>Could not load your addresses</Text>
-            <Text style={styles.body}>{addresses.error.message}</Text>
-            <Button label="Try again" variant="secondary" onPress={() => addresses.refetch()} />
-          </View>
-        ) : saved.length === 0 ? (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>No addresses yet</Text>
-            <Text style={styles.body}>Add one so you can book a service.</Text>
-          </View>
-        ) : (
-          saved.map((address) => (
-            <AddressRow
-              key={address.id}
-              address={address}
-              onDelete={() => remove.mutate(address.id)}
-              deleting={remove.isPending}
-            />
-          ))
-        )}
-
-        {remove.error ? (
-          <View accessibilityRole="alert" style={[styles.card, styles.cardError]}>
-            <Text style={styles.body}>{remove.error.message}</Text>
-          </View>
-        ) : null}
-
-        {adding ? (
-          <View style={styles.form}>
-            <Field
-              label="Street address"
-              value={street}
-              onChangeText={setStreet}
-              placeholder="14 Adeola Odeku Street"
-            />
-            <Field
-              label="Landmark"
-              value={landmark}
-              onChangeText={setLandmark}
-              placeholder="Opposite Eko Hotel gate"
-              error={
-                landmark.length === 0 && street.length > 0
-                  ? 'A landmark is how your provider will find you.'
-                  : undefined
-              }
-            />
-            <Field label="Area" value={area} onChangeText={setArea} placeholder="Victoria Island" />
-            <Field label="Local government" value={lga} onChangeText={setLga} placeholder="Eti-Osa" />
-
-            <Text style={styles.label}>State</Text>
-            <View style={styles.chips}>
-              {NIGERIAN_STATES.map((option) => (
-                <Pressable
-                  key={option.value}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: state === option.value }}
-                  accessibilityLabel={option.label}
-                  onPress={() => setState(option.value)}
-                  style={({ pressed }) => [
-                    styles.chip,
-                    state === option.value && styles.chipSelected,
-                    pressed && styles.chipPressed,
-                  ]}
-                >
-                  <Text
-                    style={[styles.chipText, state === option.value && styles.chipTextSelected]}
-                  >
-                    {option.label}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-
-            <Field
-              label="Directions (optional)"
-              value={directions}
-              onChangeText={setDirections}
-              placeholder="Blue gate, second floor."
-              multiline
-            />
-
-            {create.error ? (
-              <View accessibilityRole="alert" style={[styles.card, styles.cardError]}>
-                <Text style={styles.body}>{create.error.message}</Text>
-              </View>
-            ) : null}
-
+    <Screen refreshing={addresses.isRefetching} onRefresh={() => void addresses.refetch()}>
+      <Header
+        onBack={() => router.back()}
+        title="Addresses"
+        action={
+          saved.length > 0 ? (
             <Button
-              label="Save address"
-              loading={create.isPending}
-              disabled={!complete}
-              onPress={submit}
+              label="Add"
+              icon="plus"
+              variant="secondary"
+              size="compact"
+              fullWidth={false}
+              onPress={() => setAdding(true)}
             />
-            <Button label="Cancel" variant="secondary" onPress={() => setAdding(false)} />
-          </View>
-        ) : (
-          <Button label="Add an address" onPress={() => setAdding(true)} />
-        )}
+          ) : undefined
+        }
+      />
 
-        <Button label="Back" variant="secondary" onPress={() => router.back()} />
-      </ScrollView>
-    </SafeAreaView>
+      {addresses.isPending ? (
+        <SkeletonList rows={2} showPlate={false} />
+      ) : addresses.error ? (
+        <ErrorState error={addresses.error} onRetry={() => void addresses.refetch()} />
+      ) : saved.length === 0 ? (
+        <EmptyState
+          icon="pin"
+          title="No addresses yet"
+          body="Add the places you want work done. A landmark helps your provider find you."
+          action={<Button label="Add an address" fullWidth={false} onPress={() => setAdding(true)} />}
+        />
+      ) : (
+        <View style={styles.section}>
+          <SectionHeader title={`${saved.length} saved`} />
+          <Card padding="none">
+            <RowGroup>
+              {saved.map((address) => (
+                <AddressRow
+                  key={address.id}
+                  address={address}
+                  onDelete={() => remove.mutate(address.id)}
+                  deleting={remove.isPending && remove.variables === address.id}
+                />
+              ))}
+            </RowGroup>
+          </Card>
+        </View>
+      )}
+
+      <InlineError error={remove.error} />
+
+      <AddAddressSheet visible={adding} onClose={() => setAdding(false)} />
+    </Screen>
   );
 }
 
@@ -199,77 +102,154 @@ function AddressRow({
   deleting: boolean;
 }) {
   return (
-    <View style={styles.card}>
-      <View style={styles.rowTop}>
-        <Text style={styles.cardTitle}>{address.street_address}</Text>
-        {address.is_default ? (
-          <View style={styles.pill}>
-            <Text style={styles.pillText}>Default</Text>
+    <ListRow
+      title={address.street_address}
+      // The landmark is the subtitle rather than buried in meta, because it is
+      // what a provider actually navigates by.
+      subtitle={address.landmark}
+      meta={[address.area, address.lga, stateLabel(address.state)].filter(Boolean).join(', ')}
+      icon="pin"
+      iconTone={address.is_default ? 'primary' : 'neutral'}
+      accessibilityLabel={`${address.street_address}, ${address.landmark}${address.is_default ? ', default' : ''}`}
+      trailing={
+        <View style={styles.rowTrailing}>
+          {address.is_default ? <Pill label="Default" tone="primary" /> : null}
+          <Button
+            label={deleting ? 'Removing' : 'Remove'}
+            variant="ghost"
+            size="compact"
+            fullWidth={false}
+            loading={deleting}
+            onPress={onDelete}
+          />
+        </View>
+      }
+    />
+  );
+}
+
+/**
+ * Adding an address, in a sheet.
+ *
+ * A sheet rather than a route: it is one short form belonging to the list behind
+ * it, and pushing a screen for it would lose the list's scroll position on the
+ * way back.
+ */
+function AddAddressSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const palette = usePalette();
+  const create = useCreateAddress();
+
+  const [street, setStreet] = useState('');
+  const [landmark, setLandmark] = useState('');
+  const [area, setArea] = useState('');
+  const [lga, setLga] = useState('');
+  const [state, setState] = useState('LAGOS');
+  const [directions, setDirections] = useState('');
+  const [pickingState, setPickingState] = useState(false);
+
+  const submit = () => {
+    create.mutate(
+      {
+        street_address: street.trim(),
+        landmark: landmark.trim(),
+        area: area.trim(),
+        lga: lga.trim(),
+        state,
+        directions_note: directions.trim(),
+      },
+      {
+        onSuccess: () => {
+          setStreet('');
+          setLandmark('');
+          setArea('');
+          setLga('');
+          setDirections('');
+          onClose();
+        },
+      },
+    );
+  };
+
+  return (
+    <>
+      <Sheet
+        visible={visible && !pickingState}
+        onClose={onClose}
+        title="Add an address"
+        subtitle="The landmark matters most. It is how your provider finds you."
+      >
+        <View style={styles.form}>
+          <InlineError error={create.error} />
+
+          <Field
+            label="Street address"
+            value={street}
+            onChangeText={setStreet}
+            placeholder="14 Adeola Odeku Street"
+          />
+          <Field
+            label="Landmark"
+            value={landmark}
+            onChangeText={setLandmark}
+            hint="Opposite, beside or behind something well known"
+            placeholder="Opposite the Eko Hotel gate"
+          />
+          <Field label="Area" value={area} onChangeText={setArea} placeholder="Victoria Island" />
+          <Field label="LGA" value={lga} onChangeText={setLga} placeholder="Eti-Osa" />
+
+          <View style={styles.stateField}>
+            <Text variant="footnote" weight="medium" tone="soft">
+              State
+            </Text>
+            <Button
+              label={stateLabel(state)}
+              variant="secondary"
+              icon="chevronDown"
+              onPress={() => setPickingState(true)}
+            />
           </View>
-        ) : null}
-      </View>
-      <Text style={styles.muted}>{address.landmark}</Text>
-      <Text style={styles.muted}>
-        {[address.area, address.lga, stateLabel(address.state)].filter(Boolean).join(', ')}
-      </Text>
-      {address.directions_note ? (
-        <Text style={styles.muted}>{address.directions_note}</Text>
-      ) : null}
-      <Button label="Remove" variant="secondary" loading={deleting} onPress={onDelete} />
-    </View>
+
+          <Field
+            label="Directions (optional)"
+            value={directions}
+            onChangeText={setDirections}
+            placeholder="Blue gate, second floor"
+            multiline
+          />
+
+          <Button label="Save address" loading={create.isPending} onPress={submit} />
+        </View>
+      </Sheet>
+
+      <Sheet
+        visible={pickingState}
+        onClose={() => setPickingState(false)}
+        title="Choose a state"
+      >
+        {NIGERIAN_STATES.map((option) => (
+          <ListRow
+            key={option.value}
+            title={option.label}
+            accessibilityLabel={option.label}
+            onPress={() => {
+              setState(option.value);
+              setPickingState(false);
+            }}
+            trailing={
+              option.value === state ? (
+                <Icon name="check" size={19} color={palette.primary} strokeWidth={2.4} />
+              ) : undefined
+            }
+          />
+        ))}
+      </Sheet>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.ground },
-  content: { padding: spacing.xl, gap: spacing.md },
-  header: { gap: spacing.xs, paddingTop: spacing.lg, paddingBottom: spacing.sm },
-  title: {
-    fontSize: fontSizes.title1,
-    fontWeight: fontWeights.bold,
-    color: colors.ink,
-    letterSpacing: -0.5,
-  },
-  form: { gap: spacing.lg },
-  label: {
-    fontSize: fontSizes.footnote,
-    fontWeight: fontWeights.medium,
-    color: colors.inkSoft,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: radii.card,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    padding: spacing.lg,
-    gap: spacing.sm,
-  },
-  cardError: { borderColor: colors.danger, backgroundColor: colors.dangerSoft },
-  cardTitle: { fontSize: fontSizes.callout, fontWeight: fontWeights.semibold, color: colors.ink },
-  body: { fontSize: fontSizes.body, color: colors.inkSoft },
-  muted: { fontSize: fontSizes.footnote, color: colors.inkMuted },
-  rowTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  pill: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: 4,
-    borderRadius: radii.pill,
-    backgroundColor: colors.accentSoft,
-  },
-  pillText: { fontSize: fontSizes.caption, fontWeight: fontWeights.medium, color: colors.accent },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  chip: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radii.pill,
-    backgroundColor: colors.surfaceSunk,
-  },
-  chipSelected: { backgroundColor: colors.accent },
-  chipPressed: { opacity: 0.7 },
-  chipText: { fontSize: fontSizes.caption, color: colors.inkSoft },
-  chipTextSelected: { color: colors.onAccent, fontWeight: fontWeights.medium },
+  section: { gap: spacing.md },
+  rowTrailing: { alignItems: 'flex-end', gap: spacing.xs },
+  form: { gap: spacing.lg, paddingTop: spacing.xs },
+  stateField: { gap: spacing.sm },
 });

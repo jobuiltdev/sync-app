@@ -1,12 +1,21 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { StyleSheet, View } from 'react-native';
 
-import { offerStatusLabel } from '@/api/endpoints/offers';
 import { Button } from '@/components/ui/Button';
+import { DetailList, DetailRow, humaniseKey, humaniseValue } from '@/components/ui/DetailList';
+import { Header } from '@/components/ui/Header';
+import { IconPlate } from '@/components/ui/Pill';
+import { Screen } from '@/components/ui/Screen';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { StatusPill } from '@/components/ui/StatusPill';
+import { Card, SectionHeader } from '@/components/ui/Surface';
+import { ErrorState } from '@/components/ui/States';
+import { Text } from '@/components/ui/Text';
 import { useAcceptOffer, useDeclineOffer, useOffer } from '@/features/offers/hooks';
 import { needsVerification, toOfferOutcome } from '@/features/offers/outcomes';
-import { colors, fontSizes, fontWeights, radii, spacing } from '@/theme/tokens';
+import { offerStatusView } from '@/features/status/presentation';
+import { usePalette } from '@/theme/theme';
+import { spacing } from '@/theme/tokens';
 
 /**
  * One job, and the decision on it.
@@ -14,29 +23,40 @@ import { colors, fontSizes, fontWeights, radii, spacing } from '@/theme/tokens';
  * Whether the buttons appear is the server's call, carried on `is_actionable`.
  * Deciding locally would mean a provider tapping accept on something the server
  * has already given to somebody else.
+ *
+ * **A lost race is not an error.** Several providers see the same broadcast, so
+ * losing one is the normal working of the market and it is presented as an
+ * outcome with a way forward, not as a red failure. A provider who is shown a
+ * 409 for doing their job correctly stops trusting the app.
  */
 export default function OfferDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const palette = usePalette();
 
-  const { data: offer, isPending, error } = useOffer(id);
+  const { data: offer, isPending, error, refetch } = useOffer(id);
   const accept = useAcceptOffer();
   const decline = useDeclineOffer();
 
   if (isPending) {
     return (
-      <SafeAreaView style={styles.centred}>
-        <ActivityIndicator color={colors.accent} />
-      </SafeAreaView>
+      <Screen>
+        <Header onBack={() => router.back()} />
+        <View style={styles.loading}>
+          <Skeleton width="60%" height={30} />
+          <Skeleton width="100%" height={120} radius={18} />
+          <Skeleton width="100%" height={140} radius={18} />
+        </View>
+      </Screen>
     );
   }
 
   if (error) {
     return (
-      <SafeAreaView style={styles.centred}>
-        <Text style={styles.body}>{error.message}</Text>
-        <Button label="Back to offers" variant="secondary" onPress={() => router.back()} />
-      </SafeAreaView>
+      <Screen>
+        <Header onBack={() => router.back()} />
+        <ErrorState error={error} onRetry={() => void refetch()} />
+      </Screen>
     );
   }
 
@@ -44,149 +64,170 @@ export default function OfferDetailScreen() {
   const accepted = accept.isSuccess;
   const declined = decline.isSuccess;
 
-  // The offer is over, either because it just resolved or because the server said
-  // so. Either way the answer is to go back, not to try again.
+  // The offer is over, either because it just resolved or because the server
+  // said so. Either way the answer is to go back, not to try again.
   const finished = accepted || declined || outcome?.isFinal || !offer.is_actionable;
-
-  const where = [offer.area, offer.lga].filter(Boolean).join(', ');
+  const busy = accept.isPending || decline.isPending;
 
   return (
-    <SafeAreaView style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.header}>
-          <Text style={styles.reference}>{offer.booking_reference}</Text>
-          <Text style={styles.title}>{offer.service_name}</Text>
-          <Text style={styles.muted}>{offerStatusLabel(offer.status)}</Text>
-        </View>
+    <Screen>
+      <Header onBack={() => router.back()} />
 
-        {accepted ? (
-          <View accessibilityRole="alert" style={[styles.card, styles.cardGood]}>
-            <Text style={styles.cardTitle}>The job is yours</Text>
-            <Text style={styles.body}>It is now in your jobs list.</Text>
-            <Button label="Go to my jobs" onPress={() => router.replace('/bookings')} />
+      <View style={styles.hero}>
+        <Text variant="caption" tone="muted" style={styles.reference}>
+          {offer.booking_reference}
+        </Text>
+        <Text variant="title1" accessibilityRole="header">
+          {offer.service_name}
+        </Text>
+        <StatusPill view={offerStatusView(offer.status)} />
+      </View>
+
+      {accepted ? (
+        <Card tone="success">
+          <View accessibilityRole="alert" style={styles.result}>
+            <IconPlate icon="check" tone="success" size={40} />
+            <View style={styles.resultText}>
+              <Text variant="body" weight="semibold">
+                The job is yours
+              </Text>
+              <Text variant="footnote" tone="soft">
+                It is now in your activity, ready to start.
+              </Text>
+            </View>
           </View>
-        ) : null}
-
-        {declined ? (
-          <View accessibilityRole="alert" style={styles.card}>
-            <Text style={styles.cardTitle}>Declined</Text>
-            <Text style={styles.body}>This job will not appear in your inbox again.</Text>
+          <View style={styles.resultAction}>
+            <Button label="Go to my work" onPress={() => router.replace('/activity')} />
           </View>
-        ) : null}
+        </Card>
+      ) : null}
 
-        {outcome ? (
-          <View accessibilityRole="alert" style={[styles.card, styles.cardError]}>
-            <Text style={styles.body}>{outcome.message}</Text>
-            {needsVerification(outcome) ? (
-              <Button
-                label="Verify my details"
-                onPress={() => router.push('/verify-phone')}
-              />
+      {declined ? (
+        <Card>
+          <View accessibilityRole="alert" style={styles.result}>
+            <IconPlate icon="close" tone="neutral" size={40} />
+            <View style={styles.resultText}>
+              <Text variant="body" weight="semibold">
+                Declined
+              </Text>
+              <Text variant="footnote" tone="soft">
+                This job will not appear again. Your acceptance rate is not affected.
+              </Text>
+            </View>
+          </View>
+        </Card>
+      ) : null}
+
+      {outcome && !accepted && !declined ? (
+        // Deliberately not styled as an error when the offer was simply taken.
+        // A provider who lost a race did nothing wrong.
+        <Card tone={outcome.isFinal ? 'default' : 'danger'}>
+          <View accessibilityRole="alert" style={styles.result}>
+            <IconPlate
+              icon={outcome.isFinal ? 'info' : 'alert'}
+              tone={outcome.isFinal ? 'neutral' : 'danger'}
+              size={40}
+            />
+            <View style={styles.resultText}>
+              <Text variant="body" weight="semibold">
+                {outcome.failure === 'TAKEN'
+                  ? 'Somebody else took this one'
+                  : outcome.failure === 'EXPIRED'
+                    ? 'This offer has lapsed'
+                    : 'Could not do that'}
+              </Text>
+              <Text variant="footnote" tone="soft">
+                {outcome.message}
+              </Text>
+            </View>
+          </View>
+          {needsVerification(outcome) ? (
+            <View style={styles.resultAction}>
+              <Button label="Verify my details" onPress={() => router.push('/verify-phone')} />
+            </View>
+          ) : null}
+        </Card>
+      ) : null}
+
+      <View style={styles.section}>
+        <SectionHeader title="Where" />
+        <Card>
+          <View style={styles.address}>
+            <Text variant="body" weight="medium">
+              {offer.street_address}
+            </Text>
+            {offer.landmark ? (
+              <Text variant="footnote" tone="soft">
+                {offer.landmark}
+              </Text>
+            ) : null}
+            <Text variant="caption" tone="muted">
+              {[offer.area, offer.lga, offer.state].filter(Boolean).join(', ')}
+            </Text>
+            {offer.directions_note ? (
+              <Text variant="caption" tone="muted">
+                {offer.directions_note}
+              </Text>
             ) : null}
           </View>
-        ) : null}
+        </Card>
+      </View>
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Where</Text>
-          <Text style={styles.body}>{offer.street_address}</Text>
-          <Text style={styles.muted}>{offer.landmark}</Text>
-          <Text style={styles.muted}>{where || offer.state}</Text>
-          {offer.directions_note ? (
-            <Text style={styles.muted}>{offer.directions_note}</Text>
-          ) : null}
+      {Object.keys(offer.details).length > 0 ? (
+        <View style={styles.section}>
+          <SectionHeader title="What is being asked for" />
+          <Card>
+            <DetailList>
+              {Object.entries(offer.details).map(([key, value]) => (
+                <DetailRow key={key} label={humaniseKey(key)} value={humaniseValue(value)} />
+              ))}
+            </DetailList>
+          </Card>
         </View>
+      ) : null}
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>What is being asked for</Text>
-          {Object.entries(offer.details).map(([key, value]) => (
-            <View key={key} style={styles.detailRow}>
-              <Text style={styles.muted}>{humanise(key)}</Text>
-              <Text style={styles.detailValue}>{renderValue(value)}</Text>
-            </View>
-          ))}
-        </View>
+      {offer.is_actionable && !finished ? (
+        <Card tone="warning" padding="tight">
+          <Text variant="caption" style={{ color: palette.warning }}>
+            Offers lapse if nobody answers. Others have been offered this too.
+          </Text>
+        </Card>
+      ) : null}
 
+      <View style={styles.actions}>
         {finished ? (
-          <Button label="Back to offers" variant="secondary" onPress={() => router.back()} />
+          <Button label="Back to activity" variant="secondary" onPress={() => router.back()} />
         ) : (
           <>
             <Button
               label="Accept this job"
+              icon="check"
               loading={accept.isPending}
-              disabled={decline.isPending}
+              disabled={busy}
               onPress={() => accept.mutate({ id })}
             />
             <Button
               label="Decline"
-              variant="secondary"
+              variant="ghost"
               loading={decline.isPending}
-              disabled={accept.isPending}
+              disabled={busy}
               onPress={() => decline.mutate({ id })}
             />
           </>
         )}
-      </ScrollView>
-    </SafeAreaView>
+      </View>
+    </Screen>
   );
 }
 
-function humanise(key: string): string {
-  return key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' ');
-}
-
-function renderValue(value: unknown): string {
-  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
-  if (Array.isArray(value)) return value.join(', ');
-  return String(value);
-}
-
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.ground },
-  centred: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.ground,
-    padding: spacing.xl,
-    gap: spacing.lg,
-  },
-  content: { padding: spacing.xl, gap: spacing.lg },
-  header: { gap: spacing.xs, paddingTop: spacing.lg },
-  reference: {
-    fontSize: fontSizes.footnote,
-    color: colors.inkMuted,
-    fontVariant: ['tabular-nums'],
-  },
-  title: {
-    fontSize: fontSizes.title2,
-    fontWeight: fontWeights.bold,
-    color: colors.ink,
-    letterSpacing: -0.5,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: radii.card,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    padding: spacing.lg,
-    gap: spacing.sm,
-  },
-  cardGood: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
-  cardError: { borderColor: colors.danger, backgroundColor: colors.dangerSoft },
-  cardTitle: { fontSize: fontSizes.callout, fontWeight: fontWeights.semibold, color: colors.ink },
-  body: { fontSize: fontSizes.body, color: colors.inkSoft },
-  muted: { fontSize: fontSizes.footnote, color: colors.inkMuted },
-  detailRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: spacing.md,
-  },
-  detailValue: {
-    fontSize: fontSizes.footnote,
-    color: colors.ink,
-    fontWeight: fontWeights.medium,
-    flexShrink: 1,
-    textAlign: 'right',
-  },
+  loading: { gap: spacing.lg },
+  hero: { gap: spacing.sm, alignItems: 'flex-start' },
+  reference: { fontVariant: ['tabular-nums'] },
+  section: { gap: spacing.md },
+  result: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
+  resultText: { flex: 1, gap: spacing.xxs },
+  resultAction: { marginTop: spacing.md },
+  address: { gap: spacing.xs },
+  actions: { gap: spacing.sm },
 });

@@ -1,21 +1,19 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import type { Address } from '@/api/endpoints/addresses';
+import type { ServiceProvider } from '@/api/endpoints/catalog';
+import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
-import { useAddresses, useService, useServiceProviders } from '@/features/catalog/hooks';
-import { formatNaira } from '@/lib/money';
+import { Header } from '@/components/ui/Header';
+import { Icon } from '@/components/ui/Icon';
+import { Screen } from '@/components/ui/Screen';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { Card, SectionHeader } from '@/components/ui/Surface';
+import { BlockedState, EmptyState, ErrorState, InlineError } from '@/components/ui/States';
+import { Text } from '@/components/ui/Text';
+import { toFormErrors } from '@/features/auth/form-errors';
 import { SpecFields } from '@/features/bookings/SpecFields';
 import { useCreateBooking } from '@/features/bookings/hooks';
 import {
@@ -25,15 +23,22 @@ import {
   toRequestDetails,
 } from '@/features/bookings/spec-form';
 import { toVerificationBlock } from '@/features/bookings/verification';
-import { toFormErrors } from '@/features/auth/form-errors';
-import { MIN_TOUCH_TARGET, colors, fontSizes, fontWeights, radii, spacing } from '@/theme/tokens';
+import { useAddresses, useService, useServiceProviders } from '@/features/catalog/hooks';
+import { formatNaira, formatPriceFrom } from '@/lib/money';
+import { usePalette } from '@/theme/theme';
+import { radii, spacing } from '@/theme/tokens';
 
 /**
- * Booking flow.
+ * Booking: a confident, simple checkout.
+ *
+ * Six questions in the order a person asks them: what am I buying, who is doing
+ * it, where, what do you need to know, what does it cost, what happens next. The
+ * price is pinned in a footer above the primary action so the answer to "what
+ * does it cost" is never more than a glance away, however long the spec form is.
  *
  * The fields between "where" and "book" are whatever the service declares. This
- * screen has no idea what a cleaning or a dispatch needs, which is what lets a new
- * vertical appear without an app release.
+ * screen has no idea what a cleaning or a dispatch needs, which is what lets a
+ * new vertical appear without an app release.
  */
 export default function BookServiceScreen() {
   const { slug } = useLocalSearchParams<{ slug: string }>();
@@ -92,123 +97,232 @@ export default function BookServiceScreen() {
 
   if (service.isPending || addresses.isPending || providers.isPending) {
     return (
-      <SafeAreaView style={styles.centred}>
-        <ActivityIndicator color={colors.accent} />
-      </SafeAreaView>
+      <Screen>
+        <Header onBack={() => router.back()} />
+        <View style={styles.loading}>
+          <Skeleton width="60%" height={30} />
+          <Skeleton width="85%" height={20} />
+          <Skeleton width="100%" height={110} radius={18} />
+          <Skeleton width="100%" height={110} radius={18} />
+        </View>
+      </Screen>
     );
   }
 
   if (service.error) {
     return (
-      <SafeAreaView style={styles.centred}>
-        <Text style={styles.body}>{service.error.message}</Text>
-      </SafeAreaView>
+      <Screen>
+        <Header onBack={() => router.back()} />
+        <ErrorState error={service.error} onRetry={() => void service.refetch()} />
+      </Screen>
     );
   }
 
   const hasAddress = saved.length > 0;
   const hasProvider = available.length > 0;
+  const ready = hasAddress && hasProvider;
+  // What the customer will actually be charged, once a provider is chosen: their
+  // price, not the service's base. Still only a preview. The booking's real
+  // total is fixed by the server when it is created.
+  const preview = chosenProvider?.price_kobo ?? service.data.base_price_kobo;
 
   return (
-    <SafeAreaView style={styles.screen}>
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <View style={styles.header}>
-            <Text style={styles.title}>{service.data.name}</Text>
-            {service.data.summary ? (
-              <Text style={styles.muted}>{service.data.summary}</Text>
-            ) : null}
-          </View>
-
-          {verification ? (
-            <View accessibilityRole="alert" style={[styles.card, styles.cardWarn]}>
-              <Text style={styles.cardTitle}>One step first</Text>
-              <Text style={styles.body}>{verification.message}</Text>
-              <Button
-                label="Verify my phone number"
-                onPress={() => router.push('/verify-phone')}
-              />
+    <Screen
+      footer={
+        ready ? (
+          <>
+            <View style={styles.total}>
+              <Text variant="footnote" tone="muted">
+                Total
+              </Text>
+              <Text variant="price" weight="bold">
+                {formatNaira(preview)}
+              </Text>
             </View>
-          ) : null}
+            <Button
+              label="Book this service"
+              loading={create.isPending}
+              onPress={submit}
+            />
+          </>
+        ) : undefined
+      }
+    >
+      <Header onBack={() => router.back()} />
 
-          {apiErrors.message ? (
-            <View accessibilityRole="alert" style={[styles.card, styles.cardError]}>
-              <Text style={styles.body}>{apiErrors.message}</Text>
-            </View>
-          ) : null}
+      <View style={styles.head}>
+        <Text variant="title1" accessibilityRole="header">
+          {service.data.name}
+        </Text>
+        {service.data.summary ? (
+          <Text variant="body" tone="muted">
+            {service.data.summary}
+          </Text>
+        ) : null}
+        <Text variant="footnote" tone="primary" weight="semibold">
+          {formatPriceFrom(service.data.base_price_kobo, service.data.pricing_model)}
+        </Text>
+      </View>
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Who</Text>
-            {!hasProvider ? (
-              <View style={styles.card}>
-                <Text style={styles.body}>
-                  Nobody is offering this service yet. Try another service for now.
-                </Text>
-              </View>
-            ) : (
-              available.map((option) => (
-                <Pressable
-                  key={option.id}
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected: chosenProvider?.id === option.id }}
-                  accessibilityLabel={`${option.display_name}, ${formatNaira(option.price_kobo)}`}
-                  onPress={() => setProviderId(option.id)}
-                  style={[styles.option, chosenProvider?.id === option.id && styles.optionSelected]}
-                >
-                  <View style={styles.optionRow}>
-                    <Text style={styles.optionTitle}>{option.display_name}</Text>
-                    <Text style={styles.price}>{formatNaira(option.price_kobo)}</Text>
-                  </View>
-                  {option.bio ? <Text style={styles.muted}>{option.bio}</Text> : null}
-                </Pressable>
-              ))
-            )}
-          </View>
+      {verification ? (
+        <BlockedState
+          title="One step first"
+          body={verification.message}
+          action={
+            <Button
+              label="Verify my phone number"
+              onPress={() => router.push('/verify-phone')}
+            />
+          }
+        />
+      ) : null}
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Where</Text>
-            {!hasAddress ? (
-              <View style={styles.card}>
-                <Text style={styles.body}>
-                  You have not saved an address yet. Add one from your account before booking.
-                </Text>
-              </View>
-            ) : (
-              saved.map((address) => (
-                <AddressOption
-                  key={address.id}
-                  address={address}
-                  selected={chosenAddress?.id === address.id}
-                  onPress={() => setAddressId(address.id)}
-                />
-              ))
-            )}
-          </View>
+      {apiErrors.message ? <InlineError error={create.error} /> : null}
 
-          {schema ? (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Details</Text>
-              <SpecFields
-                schema={schema}
-                values={current}
-                errors={fieldErrors}
-                onChange={(name, value) => setValues((prev) => ({ ...prev, [name]: value }))}
-              />
-            </View>
-          ) : null}
-
-          <Button
-            label="Book this service"
-            loading={create.isPending}
-            disabled={!hasAddress || !hasProvider}
-            onPress={submit}
+      <View style={styles.section}>
+        <SectionHeader title="Who" />
+        {!hasProvider ? (
+          <EmptyState
+            icon="profile"
+            title="Nobody offers this yet"
+            body="No approved provider covers this service in your area. Try another service for now."
           />
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+        ) : (
+          <View style={styles.options}>
+            {available.map((option) => (
+              <ProviderOption
+                key={option.id}
+                provider={option}
+                selected={chosenProvider?.id === option.id}
+                onPress={() => setProviderId(option.id)}
+              />
+            ))}
+          </View>
+        )}
+      </View>
+
+      <View style={styles.section}>
+        <SectionHeader title="Where" />
+        {!hasAddress ? (
+          <BlockedState
+            icon="pin"
+            title="No address saved"
+            body="Add the place this should happen. The landmark matters more than the street."
+            action={<Button label="Add an address" onPress={() => router.push('/addresses')} />}
+          />
+        ) : (
+          <View style={styles.options}>
+            {saved.map((address) => (
+              <AddressOption
+                key={address.id}
+                address={address}
+                selected={chosenAddress?.id === address.id}
+                onPress={() => setAddressId(address.id)}
+              />
+            ))}
+          </View>
+        )}
+      </View>
+
+      {schema && schema.fields.length > 0 ? (
+        <View style={styles.section}>
+          <SectionHeader title="Details" />
+          <Card>
+            <SpecFields
+              schema={schema}
+              values={current}
+              errors={fieldErrors}
+              onChange={(name, value) => setValues((prev) => ({ ...prev, [name]: value }))}
+            />
+          </Card>
+        </View>
+      ) : null}
+
+      <Text variant="caption" tone="muted">
+        You are not charged yet. Payment happens after you book, and the price is
+        fixed when the booking is made.
+      </Text>
+    </Screen>
+  );
+}
+
+/** A selectable option. Selection is a border and a check, never a tint alone. */
+function Selectable({
+  selected,
+  onPress,
+  accessibilityLabel,
+  children,
+}: {
+  selected: boolean;
+  onPress: () => void;
+  accessibilityLabel: string;
+  children: React.ReactNode;
+}) {
+  const palette = usePalette();
+
+  return (
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      accessibilityLabel={accessibilityLabel}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.option,
+        {
+          backgroundColor: selected ? palette.primarySoft : palette.surface,
+          borderColor: selected ? palette.primary : palette.hairline,
+          borderWidth: selected ? 2 : StyleSheet.hairlineWidth * 2,
+          opacity: pressed ? 0.85 : 1,
+        },
+      ]}
+    >
+      {children}
+      {selected ? (
+        <View style={styles.tick}>
+          <Icon name="check" size={17} color={palette.primary} strokeWidth={2.4} />
+        </View>
+      ) : null}
+    </Pressable>
+  );
+}
+
+function ProviderOption({
+  provider,
+  selected,
+  onPress,
+}: {
+  provider: ServiceProvider;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Selectable
+      selected={selected}
+      onPress={onPress}
+      accessibilityLabel={`${provider.display_name}, ${formatNaira(provider.price_kobo)}`}
+    >
+      <View style={styles.optionRow}>
+        <Avatar name={provider.display_name} size={40} />
+        <View style={styles.optionText}>
+          <Text variant="body" weight="semibold" numberOfLines={1}>
+            {provider.display_name}
+          </Text>
+          {provider.experience_years ? (
+            <Text variant="caption" tone="muted">
+              {provider.experience_years} year{provider.experience_years === 1 ? '' : 's'} experience
+            </Text>
+          ) : null}
+          {provider.bio ? (
+            <Text variant="caption" tone="muted" numberOfLines={2}>
+              {provider.bio}
+            </Text>
+          ) : null}
+        </View>
+        <Text variant="price" tone="primary">
+          {formatNaira(provider.price_kobo)}
+        </Text>
+      </View>
+    </Selectable>
   );
 }
 
@@ -222,77 +336,34 @@ function AddressOption({
   onPress: () => void;
 }) {
   return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityState={{ selected }}
-      accessibilityLabel={`${address.street_address}, ${address.landmark}`}
+    <Selectable
+      selected={selected}
       onPress={onPress}
-      style={[styles.option, selected && styles.optionSelected]}
+      accessibilityLabel={`${address.street_address}, ${address.landmark}`}
     >
-      <Text style={styles.optionTitle}>{address.street_address}</Text>
-      <Text style={styles.muted}>{address.landmark}</Text>
-    </Pressable>
+      <View style={styles.optionText}>
+        <Text variant="body" weight="medium" numberOfLines={1}>
+          {address.street_address}
+        </Text>
+        <Text variant="footnote" tone="soft" numberOfLines={1}>
+          {address.landmark}
+        </Text>
+        <Text variant="caption" tone="muted">
+          {[address.area, address.state].filter(Boolean).join(', ')}
+        </Text>
+      </View>
+    </Selectable>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.ground },
-  flex: { flex: 1 },
-  centred: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.ground,
-    padding: spacing.xl,
-  },
-  content: { padding: spacing.xl, gap: spacing.xl },
-  header: { gap: spacing.xs, paddingTop: spacing.lg },
-  title: {
-    fontSize: fontSizes.title2,
-    fontWeight: fontWeights.bold,
-    color: colors.ink,
-    letterSpacing: -0.5,
-  },
-  section: { gap: spacing.sm },
-  sectionTitle: {
-    fontSize: fontSizes.callout,
-    fontWeight: fontWeights.semibold,
-    color: colors.ink,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: radii.card,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    padding: spacing.lg,
-    gap: spacing.md,
-  },
-  cardWarn: { borderColor: colors.warning, backgroundColor: colors.surfaceSunk },
-  cardError: { borderColor: colors.danger, backgroundColor: colors.dangerSoft },
-  cardTitle: { fontSize: fontSizes.callout, fontWeight: fontWeights.semibold, color: colors.ink },
-  body: { fontSize: fontSizes.body, color: colors.inkSoft },
-  muted: { fontSize: fontSizes.footnote, color: colors.inkMuted },
-  option: {
-    minHeight: MIN_TOUCH_TARGET,
-    backgroundColor: colors.surface,
-    borderRadius: radii.card,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    padding: spacing.lg,
-    gap: 2,
-  },
-  optionSelected: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
-  optionRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: spacing.md,
-  },
-  price: {
-    fontSize: fontSizes.footnote,
-    fontWeight: fontWeights.semibold,
-    color: colors.accent,
-    fontVariant: ['tabular-nums'],
-  },
-  optionTitle: { fontSize: fontSizes.body, fontWeight: fontWeights.medium, color: colors.ink },
+  loading: { gap: spacing.lg },
+  head: { gap: spacing.xs },
+  section: { gap: spacing.md },
+  options: { gap: spacing.sm },
+  option: { borderRadius: radii.card, padding: spacing.lg },
+  optionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  optionText: { flex: 1, gap: spacing.xxs },
+  tick: { position: 'absolute', top: spacing.sm, right: spacing.sm },
+  total: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
 });

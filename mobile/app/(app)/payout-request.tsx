@@ -1,10 +1,15 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { StyleSheet, View } from 'react-native';
 
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
+import { Header } from '@/components/ui/Header';
+import { Screen } from '@/components/ui/Screen';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { Card } from '@/components/ui/Surface';
+import { BlockedState, InlineError } from '@/components/ui/States';
+import { Text } from '@/components/ui/Text';
 import { validateAmount } from '@/features/payments/amount';
 import { useEarnings, useRequestPayout } from '@/features/payments/hooks';
 import {
@@ -15,19 +20,19 @@ import {
 } from '@/features/payments/outcomes';
 import { newIdempotencyKey } from '@/lib/idempotency';
 import { formatNaira } from '@/lib/money';
-import { colors, fontSizes, fontWeights, radii, spacing } from '@/theme/tokens';
+import { spacing } from '@/theme/tokens';
 
 /**
  * Asking to be paid.
  *
- * The amount is entered in naira and converted to kobo once, here, on the way
- * out. Everything that crosses the API is an integer number of kobo, so there is
- * no point at which a fraction of a naira can be introduced.
+ * The idempotency key is generated once when the screen mounts and reused for
+ * every attempt from it. That is what makes this safe on a Nigerian mobile
+ * connection: a request that timed out may well have been received, and without
+ * the key a retry would be a second withdrawal.
  *
- * The idempotency key is minted once when the screen opens and held for the life
- * of this attempt. A tap that times out and is tapped again sends the same key,
- * so the server answers with the payout it already made rather than making a
- * second one.
+ * Local validation is a courtesy that saves a doomed round trip. The server
+ * decides, and when the two disagree the server is right: another device may
+ * have spent the balance since this screen loaded.
  */
 export default function PayoutRequestScreen() {
   const router = useRouter();
@@ -51,118 +56,90 @@ export default function PayoutRequestScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.header}>
-          <Text style={styles.title}>Request a payout</Text>
-          {earnings.isPending ? (
-            <ActivityIndicator color={colors.accent} />
-          ) : (
-            <Text style={styles.muted}>{formatNaira(available)} available</Text>
-          )}
-        </View>
-
-        <Field
-          label="Amount in naira"
-          value={amount}
-          onChangeText={setAmount}
-          keyboardType="number-pad"
-          placeholder="0"
-          error={amount.length > 0 && localError ? localError : undefined}
-        />
-
-        {kobo !== null && localError === null ? (
-          <Text style={styles.muted}>
-            You will be sent {formatNaira(kobo)}, leaving {formatNaira(available - kobo)}.
-          </Text>
-        ) : null}
-
-        {outcome ? (
-          <View style={[styles.card, styles.cardError]}>
-            <Text style={styles.cardTitle}>{headline(outcome.failure)}</Text>
-            <Text style={styles.body}>{outcome.message}</Text>
-
-            {needsVerification(outcome) ? (
-              <Button
-                label="Verify now"
-                variant="secondary"
-                onPress={() => router.push('/verify-phone')}
-              />
-            ) : null}
-
-            {needsDestination(outcome) ? (
-              <Button
-                label="Add your bank account"
-                variant="secondary"
-                onPress={() => router.push('/payout-destination')}
-              />
-            ) : null}
-
-            {needsDestinationVerification(outcome) ? (
-              <Button
-                label="Confirm your bank account"
-                variant="secondary"
-                onPress={() => router.push('/payout-destination')}
-              />
-            ) : null}
-
-            {outcome.isRetryable ? (
-              <Button label="Try again" variant="secondary" onPress={submit} />
-            ) : null}
-          </View>
-        ) : null}
-
+    <Screen
+      footer={
         <Button
           label="Request payout"
           loading={request.isPending}
-          disabled={localError !== null}
+          disabled={localError !== null || kobo === null}
           onPress={submit}
         />
-        <Button label="Back" variant="secondary" onPress={() => router.back()} />
-      </ScrollView>
-    </SafeAreaView>
+      }
+    >
+      <Header onBack={() => router.back()} title="Request a payout" />
+
+      <Card>
+        <View style={styles.available}>
+          <Text variant="overline" tone="muted">
+            Available
+          </Text>
+          {earnings.isPending ? (
+            <Skeleton width="55%" height={38} />
+          ) : (
+            <Text variant="priceLarge">{formatNaira(available)}</Text>
+          )}
+        </View>
+      </Card>
+
+      <Field
+        label="Amount"
+        prefix="₦"
+        value={amount}
+        onChangeText={setAmount}
+        keyboardType="number-pad"
+        placeholder="0"
+        error={amount.length > 0 && localError ? localError : undefined}
+        hint={
+          kobo !== null && localError === null
+            ? `Leaves ${formatNaira(available - kobo)} in your balance.`
+            : 'Whole naira only.'
+        }
+      />
+
+      {outcome ? (
+        needsVerification(outcome) ? (
+          <BlockedState
+            title="Verify your details first"
+            body={outcome.message}
+            action={<Button label="Verify now" onPress={() => router.push('/verify-phone')} />}
+          />
+        ) : needsDestination(outcome) ? (
+          <BlockedState
+            icon="bank"
+            title="No bank account on file"
+            body={outcome.message}
+            action={
+              <Button
+                label="Add your account"
+                onPress={() => router.push('/payout-destination')}
+              />
+            }
+          />
+        ) : needsDestinationVerification(outcome) ? (
+          <BlockedState
+            icon="bank"
+            title="Confirm your account first"
+            body={outcome.message}
+            action={
+              <Button
+                label="Confirm with your bank"
+                onPress={() => router.push('/payout-destination')}
+              />
+            }
+          />
+        ) : (
+          <InlineError error={request.error} />
+        )
+      ) : null}
+
+      <Text variant="caption" tone="muted">
+        Payouts go only to the account you have confirmed with your bank. Sync never
+        sends the same transfer twice.
+      </Text>
+    </Screen>
   );
 }
 
-function headline(failure: string): string {
-  switch (failure) {
-    case 'VERIFICATION_REQUIRED':
-      return 'Verify your details first';
-    case 'NO_DESTINATION':
-      return 'No bank account on file';
-    case 'UNVERIFIED_DESTINATION':
-      return 'Your bank account is not confirmed';
-    case 'INSUFFICIENT_BALANCE':
-      return 'Not enough available';
-    case 'ALREADY_REQUESTED':
-      return 'A payout is already under way';
-    case 'CONNECTION':
-      return 'No connection';
-    default:
-      return 'Could not request that payout';
-  }
-}
-
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.ground },
-  content: { padding: spacing.xl, gap: spacing.md },
-  header: { gap: spacing.xs, paddingTop: spacing.lg, paddingBottom: spacing.sm },
-  title: {
-    fontSize: fontSizes.title1,
-    fontWeight: fontWeights.bold,
-    color: colors.ink,
-    letterSpacing: -0.5,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: radii.card,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    padding: spacing.lg,
-    gap: spacing.md,
-  },
-  cardError: { borderColor: colors.danger, backgroundColor: colors.dangerSoft },
-  cardTitle: { fontSize: fontSizes.callout, fontWeight: fontWeights.semibold, color: colors.ink },
-  body: { fontSize: fontSizes.body, color: colors.inkSoft },
-  muted: { fontSize: fontSizes.footnote, color: colors.inkMuted },
+  available: { gap: spacing.xs },
 });

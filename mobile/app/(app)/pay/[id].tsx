@@ -1,30 +1,37 @@
 import * as Linking from 'expo-linking';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { StyleSheet, View } from 'react-native';
 
-import { paymentStatusLabel } from '@/api/endpoints/payments-customer';
 import { Button } from '@/components/ui/Button';
+import { Header } from '@/components/ui/Header';
+import { IconPlate } from '@/components/ui/Pill';
+import { Screen } from '@/components/ui/Screen';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { StatusPill } from '@/components/ui/StatusPill';
+import { Card } from '@/components/ui/Surface';
+import { ErrorState, InlineError } from '@/components/ui/States';
+import { Text } from '@/components/ui/Text';
 import { useBooking } from '@/features/bookings/hooks';
 import { type CheckoutStage, stageLabel, toPaymentOutcome } from '@/features/payments/checkout';
 import { useStartPayment, useVerifyPayment } from '@/features/payments/hooks';
+import { paymentStatusView } from '@/features/status/presentation';
 import { newIdempotencyKey } from '@/lib/idempotency';
 import { formatNaira } from '@/lib/money';
-import { colors, fontSizes, fontWeights, radii, spacing } from '@/theme/tokens';
+import { spacing } from '@/theme/tokens';
 
 /**
  * Paying for a booking.
  *
  * Three steps, and the app is only in charge of the first. It asks the server to
  * start a payment, opens the provider's hosted checkout in the system browser,
- * and when the customer comes back it asks the server to check. It never decides
- * that a payment succeeded: coming back from the browser proves nothing, since a
- * customer who closed the page and one who paid look identical from here.
+ * and when the customer comes back it asks the server to check.
  *
- * Card details never touch this app, which is why checkout is a hosted page
- * rather than a form. It also means no native module and no new dependency, so
- * the project stays on Expo SDK 54 and keeps working in Expo Go.
+ * **It never decides that a payment succeeded.** Coming back from the browser
+ * proves nothing: a customer who paid and one who closed the page look identical
+ * from here. Nothing on this screen says "paid" until the server, having asked
+ * the payment provider, says so. That is why returning from checkout puts the
+ * screen in "check payment" and not in a success state.
  */
 export default function PayScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -82,138 +89,130 @@ export default function PayScreen() {
 
   if (booking.isPending) {
     return (
-      <SafeAreaView style={styles.centred}>
-        <ActivityIndicator color={colors.accent} />
-      </SafeAreaView>
+      <Screen>
+        <Header onBack={() => router.back()} />
+        <View style={styles.loading}>
+          <Skeleton width="50%" height={28} />
+          <Skeleton width="100%" height={160} radius={18} />
+        </View>
+      </Screen>
     );
   }
 
   if (booking.error) {
     return (
-      <SafeAreaView style={styles.centred}>
-        <Text style={styles.body}>{booking.error.message}</Text>
-        <Button label="Back" variant="secondary" onPress={() => router.back()} />
-      </SafeAreaView>
+      <Screen>
+        <Header onBack={() => router.back()} />
+        <ErrorState error={booking.error} onRetry={() => void booking.refetch()} />
+      </Screen>
     );
   }
 
-  return (
-    <SafeAreaView style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.header}>
-          <Text style={styles.reference}>{booking.data.reference}</Text>
-          <Text style={styles.title}>{booking.data.service_name}</Text>
-        </View>
+  const paid = stage === 'PAID';
+  const busy = start.isPending || verify.isPending;
 
-        <View style={styles.amountCard}>
-          <Text style={styles.amountLabel}>Amount to pay</Text>
+  return (
+    <Screen>
+      <Header onBack={() => router.back()} />
+
+      <View style={styles.head}>
+        <Text variant="caption" tone="muted" style={styles.reference}>
+          {booking.data.reference}
+        </Text>
+        <Text variant="title1" accessibilityRole="header">
+          {paid ? 'Payment received' : 'Pay for this booking'}
+        </Text>
+        <Text variant="footnote" tone="muted">
+          {booking.data.service_name}
+        </Text>
+      </View>
+
+      <Card tone={paid ? 'success' : 'default'}>
+        <View style={styles.amount}>
+          {paid ? <IconPlate icon="check" tone="success" size={44} /> : null}
+          <Text variant="overline" tone="muted">
+            {paid ? 'Amount paid' : 'Amount to pay'}
+          </Text>
           <Text
-            accessibilityLabel={`Amount to pay, ${formatNaira(booking.data.total_kobo)}`}
-            style={styles.amount}
+            variant="priceLarge"
+            accessibilityLabel={`${paid ? 'Amount paid' : 'Amount to pay'}, ${formatNaira(booking.data.total_kobo)}`}
           >
             {formatNaira(booking.data.total_kobo)}
           </Text>
-          <Text style={styles.muted}>
+          <Text variant="caption" tone="muted">
             The price agreed when you made this booking. It does not change.
           </Text>
         </View>
+      </Card>
 
-        {stage !== 'IDLE' ? (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>{stageLabel(stage)}</Text>
-            {payment ? (
-              <Text style={styles.muted}>
-                {paymentStatusLabel(payment.status)}
-                {payment.method ? ` by ${payment.method.replace(/_/g, ' ')}` : ''}
+      {stage !== 'IDLE' ? (
+        <Card>
+          <View style={styles.stage}>
+            <Text variant="body" weight="semibold">
+              {stageLabel(stage)}
+            </Text>
+            {payment ? <StatusPill view={paymentStatusView(payment.status)} /> : null}
+            {payment?.method ? (
+              <Text variant="caption" tone="muted">
+                Paid by {payment.method.replace(/_/g, ' ').toLowerCase()}
               </Text>
             ) : null}
-            {start.isPending || verify.isPending ? (
-              <ActivityIndicator color={colors.accent} />
-            ) : null}
-          </View>
-        ) : null}
-
-        {outcome ? (
-          <View style={[styles.card, styles.cardError]}>
-            <Text style={styles.cardTitle}>Could not take that payment</Text>
-            <Text style={styles.body}>{outcome.message}</Text>
-            {outcome.isRetryable ? (
-              <Button label="Try again" variant="secondary" onPress={openCheckout} />
-            ) : null}
-          </View>
-        ) : null}
-
-        {stage === 'PAID' ? (
-          <>
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Payment received</Text>
-              <Text style={styles.body}>
-                Thank you. Your provider will be paid once the work is confirmed.
+            {stage === 'AWAITING_PAYMENT' ? (
+              <Text variant="caption" tone="muted">
+                We will not mark this paid until your bank confirms it with us.
               </Text>
-            </View>
-            <Button label="Back to booking" onPress={() => router.back()} />
-          </>
+            ) : null}
+          </View>
+        </Card>
+      ) : null}
+
+      {outcome ? <InlineError error={start.error ?? verify.error} /> : null}
+
+      <View style={styles.actions}>
+        {paid ? (
+          <Button
+            label="Back to booking"
+            onPress={() => router.replace(`/booking/${id}`)}
+          />
         ) : stage === 'AWAITING_PAYMENT' || stage === 'FAILED' || stage === 'CHECKING' ? (
           <>
             <Button
               label="I have paid, check now"
+              icon="refresh"
               loading={verify.isPending}
+              disabled={busy}
               onPress={check}
             />
-            <Button label="Open checkout again" variant="secondary" onPress={openCheckout} />
+            <Button
+              label="Open checkout again"
+              variant="secondary"
+              disabled={busy}
+              onPress={openCheckout}
+            />
           </>
         ) : (
-          <Button label="Pay now" loading={start.isPending} onPress={openCheckout} />
+          <Button
+            label="Pay now"
+            icon="card"
+            loading={start.isPending}
+            disabled={busy}
+            onPress={openCheckout}
+          />
         )}
+      </View>
 
-        <Button label="Back" variant="secondary" onPress={() => router.back()} />
-      </ScrollView>
-    </SafeAreaView>
+      <Text variant="caption" tone="muted" center>
+        Payment opens in your browser. Your card details never reach this app.
+      </Text>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.ground },
-  centred: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.md,
-    padding: spacing.xl,
-    backgroundColor: colors.ground,
-  },
-  content: { padding: spacing.xl, gap: spacing.md },
-  header: { gap: spacing.xs, paddingTop: spacing.lg, paddingBottom: spacing.sm },
-  reference: { fontSize: fontSizes.caption, color: colors.inkMuted, fontVariant: ['tabular-nums'] },
-  title: {
-    fontSize: fontSizes.title2,
-    fontWeight: fontWeights.bold,
-    color: colors.ink,
-    letterSpacing: -0.5,
-  },
-  amountCard: {
-    backgroundColor: colors.accentSoft,
-    borderRadius: radii.card,
-    padding: spacing.xl,
-    gap: spacing.xs,
-  },
-  amountLabel: { fontSize: fontSizes.footnote, color: colors.inkSoft },
-  amount: {
-    fontSize: fontSizes.title1,
-    fontWeight: fontWeights.bold,
-    color: colors.accent,
-    fontVariant: ['tabular-nums'],
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: radii.card,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    padding: spacing.lg,
-    gap: spacing.md,
-  },
-  cardError: { borderColor: colors.danger, backgroundColor: colors.dangerSoft },
-  cardTitle: { fontSize: fontSizes.callout, fontWeight: fontWeights.semibold, color: colors.ink },
-  body: { fontSize: fontSizes.body, color: colors.inkSoft },
-  muted: { fontSize: fontSizes.footnote, color: colors.inkMuted },
+  loading: { gap: spacing.lg },
+  head: { gap: spacing.xs },
+  reference: { fontVariant: ['tabular-nums'] },
+  amount: { gap: spacing.xs, alignItems: 'flex-start' },
+  stage: { gap: spacing.sm, alignItems: 'flex-start' },
+  actions: { gap: spacing.sm },
 });

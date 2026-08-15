@@ -1,160 +1,151 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { StyleSheet, View } from 'react-native';
 
-import { payoutStageMessage, payoutStatusLabel } from '@/api/endpoints/payments';
 import { Button } from '@/components/ui/Button';
+import { DetailList, DetailRow } from '@/components/ui/DetailList';
+import { Header } from '@/components/ui/Header';
+import { IconPlate } from '@/components/ui/Pill';
+import { Screen } from '@/components/ui/Screen';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { StatusPill } from '@/components/ui/StatusPill';
+import { Card, SectionHeader } from '@/components/ui/Surface';
+import { ErrorState, InlineError } from '@/components/ui/States';
+import { Text } from '@/components/ui/Text';
 import { useCancelPayout, usePayout } from '@/features/payments/hooks';
-import { toPayoutOutcome } from '@/features/payments/outcomes';
+import { payoutStatusView } from '@/features/status/presentation';
 import { formatNaira } from '@/lib/money';
-import { colors, fontSizes, fontWeights, radii, spacing } from '@/theme/tokens';
+import { spacing } from '@/theme/tokens';
 
 /**
- * One payout, and the only thing its owner may do to it.
+ * One payout.
  *
  * Whether cancelling is offered comes from the server's `is_cancellable`. The
- * app does not work it out from the status, because the rule about which states
- * a provider may leave lives in the payout lifecycle and a second copy of it
- * here would eventually disagree.
+ * app does not work it out from the status, because a payout that has been
+ * submitted must never be cancellable and that rule belongs in one place.
+ *
+ * The five stages are visually distinct and honestly named. `PROCESSING` in
+ * particular means two different things depending on whether a transfer
+ * reference exists, and the distinction matters: one of them means the money
+ * may already have left.
  */
-export default function PayoutDetailScreen() {
+export default function PayoutScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+
   const { data: payout, isPending, error, refetch, isFetching } = usePayout(id);
   const cancel = useCancelPayout();
 
   if (isPending) {
     return (
-      <SafeAreaView style={styles.centred}>
-        <ActivityIndicator color={colors.accent} />
-      </SafeAreaView>
+      <Screen>
+        <Header onBack={() => router.back()} />
+        <View style={styles.loading}>
+          <Skeleton width="50%" height={36} />
+          <Skeleton width="100%" height={150} radius={18} />
+        </View>
+      </Screen>
     );
   }
 
   if (error) {
     return (
-      <SafeAreaView style={styles.centred}>
-        <Text style={styles.body}>{error.message}</Text>
-        <Button label="Try again" variant="secondary" onPress={() => refetch()} />
-      </SafeAreaView>
+      <Screen>
+        <Header onBack={() => router.back()} />
+        <ErrorState error={error} onRetry={() => void refetch()} />
+      </Screen>
     );
   }
 
-  const outcome = toPayoutOutcome(cancel.error);
+  const view = payoutStatusView(payout);
 
   return (
-    <SafeAreaView style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.header}>
-          <Text style={styles.amount}>{formatNaira(payout.amount_kobo)}</Text>
-          <Text style={styles.status}>{payoutStatusLabel(payout.status)}</Text>
-        </View>
+    <Screen refreshing={isFetching} onRefresh={() => void refetch()}>
+      <Header onBack={() => router.back()} />
 
-        <View style={styles.card}>
-          <Text style={styles.body}>{payoutStageMessage(payout)}</Text>
-          {payout.transfer_reference ? (
-            <Text style={styles.muted}>Reference {payout.transfer_reference}</Text>
-          ) : null}
-        </View>
-
-        <View style={styles.card}>
-          <Row label="Requested" value={new Date(payout.requested_at).toLocaleString('en-NG')} />
-          {payout.submitted_at ? (
-            <Row label="Sent" value={new Date(payout.submitted_at).toLocaleString('en-NG')} />
-          ) : null}
-          {payout.processed_at ? (
-            <Row label="Resolved" value={new Date(payout.processed_at).toLocaleString('en-NG')} />
-          ) : null}
-          <Row label="Currency" value={payout.currency} />
-        </View>
-
-        {payout.failure_reason ? (
-          <View style={[styles.card, styles.cardError]}>
-            <Text style={styles.cardTitle}>Why it failed</Text>
-            <Text style={styles.body}>{payout.failure_reason}</Text>
-            <Text style={styles.muted}>
-              The money is back in your available balance. You can ask again.
-            </Text>
-          </View>
-        ) : null}
-
-        {outcome ? (
-          <View style={[styles.card, styles.cardError]}>
-            <Text style={styles.cardTitle}>Could not cancel</Text>
-            <Text style={styles.body}>{outcome.message}</Text>
-            <Button label="Refresh" variant="secondary" onPress={() => refetch()} />
-          </View>
-        ) : null}
-
-        <Button
-          label="Refresh"
-          variant="secondary"
-          loading={isFetching}
-          onPress={() => refetch()}
-        />
-
-        {payout.is_cancellable ? (
-          <Button
-            label="Cancel this payout"
-            variant="secondary"
-            loading={cancel.isPending}
-            onPress={() => cancel.mutate(payout.id)}
+      <Card tone={view.tone === 'success' ? 'success' : view.tone === 'danger' ? 'danger' : 'default'}>
+        <View style={styles.hero}>
+          <IconPlate
+            icon={
+              payout.status === 'PAID'
+                ? 'check'
+                : payout.status === 'FAILED'
+                  ? 'alert'
+                  : payout.status === 'CANCELLED'
+                    ? 'close'
+                    : 'clock'
+            }
+            tone={view.tone === 'live' ? 'primary' : view.tone}
+            size={48}
           />
-        ) : null}
+          <Text
+            variant="display"
+            accessibilityLabel={`${formatNaira(payout.amount_kobo)}, ${view.label}`}
+          >
+            {formatNaira(payout.amount_kobo)}
+          </Text>
+          <StatusPill view={view} />
+          {view.detail ? (
+            <Text variant="footnote" tone="soft">
+              {view.detail}
+            </Text>
+          ) : null}
+        </View>
+      </Card>
 
-        <Button label="Back" variant="secondary" onPress={() => router.back()} />
-      </ScrollView>
-    </SafeAreaView>
+      <View style={styles.section}>
+        <SectionHeader title="Details" />
+        <Card>
+          <DetailList>
+            <DetailRow label="Requested" value={formatWhen(payout.requested_at)} />
+            {payout.submitted_at ? (
+              <DetailRow label="Sent to bank" value={formatWhen(payout.submitted_at)} />
+            ) : null}
+            {payout.processed_at ? (
+              <DetailRow label="Resolved" value={formatWhen(payout.processed_at)} />
+            ) : null}
+            {payout.transfer_reference ? (
+              // Worth showing: it is the reference support would ask for, and
+              // the one the bank can be asked about.
+              <DetailRow label="Reference" value={payout.transfer_reference} />
+            ) : null}
+          </DetailList>
+        </Card>
+      </View>
+
+      <InlineError error={cancel.error} />
+
+      {payout.is_cancellable ? (
+        <Button
+          label="Cancel this payout"
+          variant="secondary"
+          loading={cancel.isPending}
+          onPress={() => cancel.mutate(payout.id)}
+        />
+      ) : null}
+
+      {payout.status === 'PROCESSING' && payout.transfer_reference ? (
+        <Text variant="caption" tone="muted">
+          This cannot be cancelled. It has been sent to your bank and Sync never sends the
+          same transfer twice.
+        </Text>
+      ) : null}
+    </Screen>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.row}>
-      <Text style={styles.muted}>{label}</Text>
-      <Text style={styles.rowValue}>{value}</Text>
-    </View>
-  );
+function formatWhen(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('en-NG', {
+    day: 'numeric',
+    month: 'short',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.ground },
-  centred: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.md,
-    padding: spacing.xl,
-    backgroundColor: colors.ground,
-  },
-  content: { padding: spacing.xl, gap: spacing.md },
-  header: { gap: spacing.xs, paddingTop: spacing.lg, paddingBottom: spacing.sm },
-  amount: {
-    fontSize: fontSizes.title1,
-    fontWeight: fontWeights.bold,
-    color: colors.ink,
-    letterSpacing: -0.5,
-    fontVariant: ['tabular-nums'],
-  },
-  status: { fontSize: fontSizes.body, color: colors.inkSoft },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: radii.card,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    padding: spacing.lg,
-    gap: spacing.xs,
-  },
-  cardError: { borderColor: colors.danger, backgroundColor: colors.dangerSoft, gap: spacing.md },
-  cardTitle: { fontSize: fontSizes.callout, fontWeight: fontWeights.semibold, color: colors.ink },
-  body: { fontSize: fontSizes.body, color: colors.inkSoft },
-  muted: { fontSize: fontSizes.footnote, color: colors.inkMuted },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.md,
-    paddingVertical: 2,
-  },
-  rowValue: { fontSize: fontSizes.footnote, fontWeight: fontWeights.medium, color: colors.ink },
+  loading: { gap: spacing.lg },
+  hero: { alignItems: 'flex-start', gap: spacing.sm },
+  section: { gap: spacing.md },
 });

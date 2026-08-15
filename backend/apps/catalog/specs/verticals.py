@@ -68,8 +68,14 @@ class ErrandsSpec(ServiceSpec):
 
 
 class HomeServicesDetailsSerializer(serializers.Serializer):
+    #: Four trades, not six. Air conditioning and appliance repair were separate
+    #: options until a customer had to choose between them and "electrical" for
+    #: the same fault, which is a question about our category list rather than
+    #: about their problem. Both are electrical work and both are done by the
+    #: same person, so they are electrical. `problem_description` carries the
+    #: specifics, which is what the provider actually reads.
     trade = serializers.ChoiceField(
-        choices=["PLUMBING", "ELECTRICAL", "CARPENTRY", "APPLIANCE", "PAINTING", "AC"],
+        choices=["PLUMBING", "ELECTRICAL", "CARPENTRY", "PAINTING"],
         label="Trade",
     )
     problem_description = serializers.CharField(max_length=1000, label="What is the problem")

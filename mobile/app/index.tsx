@@ -2,7 +2,7 @@ import { Redirect } from 'expo-router';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { useSessionStore } from '@/state/session';
-import { colors } from '@/theme/tokens';
+import { usePalette } from '@/theme/theme';
 
 /**
  * Entry point. Holds the first paint until the keychain has been read, so a
@@ -11,11 +11,12 @@ import { colors } from '@/theme/tokens';
  */
 export default function Index() {
   const status = useSessionStore((state) => state.status);
+  const palette = usePalette();
 
   if (status === 'loading') {
     return (
-      <View style={styles.splash}>
-        <ActivityIndicator color={colors.accent} />
+      <View style={[styles.splash, { backgroundColor: palette.ground }]}>
+        <ActivityIndicator color={palette.primary} />
       </View>
     );
   }
@@ -24,10 +25,5 @@ export default function Index() {
 }
 
 const styles = StyleSheet.create({
-  splash: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.ground,
-  },
+  splash: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 });
