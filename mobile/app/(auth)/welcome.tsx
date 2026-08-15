@@ -12,7 +12,7 @@ import { radii, spacing } from '@/theme/tokens';
  *  purpose: this screen renders before there is a session, so it cannot fetch
  *  the catalog, and a spinner is a poor first impression of a product. */
 const VERTICALS: { icon: IconName; label: string }[] = [
-  { icon: 'dispatch', label: 'Dispatch' },
+  { icon: 'dispatch', label: 'Courier' },
   { icon: 'cleaning', label: 'Cleaning' },
   { icon: 'errands', label: 'Errands' },
   { icon: 'handyman', label: 'Home services' },

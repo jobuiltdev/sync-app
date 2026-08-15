@@ -55,14 +55,17 @@ class SeedCategory:
 #: then the work done at your home, then the things you drop off.
 CATALOG: list[SeedCategory] = [
     SeedCategory(
+        # The slug and the spec key stay "dispatch": they are internal
+        # identifiers, one of them is stamped on every booking ever made, and
+        # renaming a category is a copy decision rather than a data migration.
         slug="dispatch",
-        name="Dispatch",
+        name="Courier Services",
         description="Send a package across town, same day.",
         icon_key="dispatch",
         services=[
             SeedService(
                 slug="same-day-dispatch",
-                name="Same Day Dispatch",
+                name="Same Day Delivery",
                 summary="Picked up and delivered across Lagos today.",
                 spec_key="dispatch",
                 pricing_model=PricingModel.DISTANCE,

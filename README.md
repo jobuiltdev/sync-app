@@ -1,7 +1,7 @@
 # Sync
 
-A Nigerian everyday-services marketplace. Customers book dispatch, cleaning,
-errands, home services, beauty and grooming, and laundry from one mobile app.
+A Nigerian everyday-services marketplace. Customers book courier services,
+cleaning, errands, home services, beauty and laundry from one mobile app.
 Providers receive and fulfil that work through the same app.
 
 - `backend/` Django REST API

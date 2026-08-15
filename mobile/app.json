@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "sync",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "ng.sync.app"
@@ -34,6 +34,15 @@
           "backgroundColor": "#F7F9F7",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Sync uses your location only while you are looking at a job, to show how far away it is. It is never shared and never leaves your phone.",
+          "locationWhenInUsePermission": "Sync uses your location only while you are looking at a job, to show how far away it is. It is never shared and never leaves your phone.",
+          "isIosBackgroundLocationEnabled": false,
+          "isAndroidBackgroundLocationEnabled": false
         }
       ]
     ],

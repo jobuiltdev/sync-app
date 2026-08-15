@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import type { Address } from '@/api/endpoints/addresses';
+import { LocationPicker } from '@/components/map/LocationPicker';
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { Header } from '@/components/ui/Header';
@@ -16,6 +17,7 @@ import { Card, SectionHeader } from '@/components/ui/Surface';
 import { EmptyState, ErrorState, InlineError } from '@/components/ui/States';
 import { Text } from '@/components/ui/Text';
 import { useAddresses, useCreateAddress, useDeleteAddress } from '@/features/catalog/hooks';
+import type { Coordinate } from '@/features/location/geo';
 import { NIGERIAN_STATES, stateLabel } from '@/lib/nigeria';
 import { usePalette } from '@/theme/theme';
 import { spacing } from '@/theme/tokens';
@@ -145,6 +147,7 @@ function AddAddressSheet({ visible, onClose }: { visible: boolean; onClose: () =
   const [lga, setLga] = useState('');
   const [state, setState] = useState('LAGOS');
   const [directions, setDirections] = useState('');
+  const [pin, setPin] = useState<Coordinate | null>(null);
   const [pickingState, setPickingState] = useState(false);
 
   const submit = () => {
@@ -156,6 +159,10 @@ function AddAddressSheet({ visible, onClose }: { visible: boolean; onClose: () =
         lga: lga.trim(),
         state,
         directions_note: directions.trim(),
+        // Sent as a pair or not at all: the API refuses a half-set one, and a
+        // decimal column is not somewhere to put a float.
+        latitude: pin ? String(pin.latitude) : null,
+        longitude: pin ? String(pin.longitude) : null,
       },
       {
         onSuccess: () => {
@@ -164,6 +171,7 @@ function AddAddressSheet({ visible, onClose }: { visible: boolean; onClose: () =
           setArea('');
           setLga('');
           setDirections('');
+          setPin(null);
           onClose();
         },
       },
@@ -216,6 +224,8 @@ function AddAddressSheet({ visible, onClose }: { visible: boolean; onClose: () =
             placeholder="Blue gate, second floor"
             multiline
           />
+
+          <LocationPicker value={pin} onChange={setPin} />
 
           <Button label="Save address" loading={create.isPending} onPress={submit} />
         </View>

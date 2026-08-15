@@ -3,6 +3,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { statusLabel } from '@/api/endpoints/bookings';
 import { Button } from '@/components/ui/Button';
+import { DispatchSection } from '@/components/map/DispatchSection';
 import { DetailList, DetailRow, humaniseKey, humaniseValue } from '@/components/ui/DetailList';
 import { Header } from '@/components/ui/Header';
 import { IconPlate } from '@/components/ui/Pill';
@@ -110,6 +111,17 @@ export default function BookingDetailScreen() {
 
       <View style={styles.section}>
         <SectionHeader title="Where" />
+
+        {/* The customer's own address, pinned. No provider position and no ETA:
+            live tracking is a different product with a privacy model this app
+            has not decided on. See the Open item in docs/architecture.md. */}
+        <DispatchSection
+          address={booking.address}
+          status={booking.status}
+          reference={booking.reference}
+          variant="customer"
+        />
+
         <Card>
           <View style={styles.address}>
             <Text variant="body" weight="medium">

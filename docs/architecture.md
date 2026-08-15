@@ -1292,7 +1292,7 @@ mobile/
 | Sheets | Modal plus Animated | `components/ui/Sheet`. gorhom/bottom-sheet is not needed for a tap-to-dismiss sheet |
 | Blur | expo-blur | The glass tab bar. A platform effect, not an effect library |
 | Icons | react-native-svg, drawn in-repo | A custom set beats a several-megabyte icon font used fifteen times |
-| Maps | react-native-maps | Dispatch tracking, address pin-drop. Dev build |
+| Maps | react-native-maps | Job location, address pin-drop. Runs in Expo Go |
 | Secrets | expo-secure-store | Refresh tokens never touch AsyncStorage |
 | Testing | Jest, Testing Library, MSW | Hooks, state machine, gating, critical flows |
 
@@ -1424,6 +1424,75 @@ this wrong is invisible on a tall phone and hides the last row on a short one.
   re-implementing the lifecycle on the client.
 - **Never "Something went wrong" when the API said better.** The error envelope
   carries a human message and a stable code, and `messageFor()` prefers it.
+
+### The dispatch map, as implemented in M9.1
+
+A provider opens a job, understands where it is, sees how far away they are when
+they ask, opens their own maps app to drive there, and comes back to Sync to move
+the job forward. That is the whole feature, and the boundaries around it are more
+interesting than the map itself.
+
+**react-native-maps, not expo-maps.** Both are in SDK 54's manifest. `expo-maps`
+requires a development build; `react-native-maps` runs inside Expo Go, which is
+the whole verification loop for this project today. It uses Apple Maps on iOS and
+Google Maps on Android through `PROVIDER_DEFAULT`, so neither platform needs an
+API key to render at the Expo Go stage.
+
+**The map is an orientation tool. The phone is the navigator.** Turn-by-turn is a
+solved problem owned by software with offline tiles, live traffic and a voice.
+Sync knows which job, where, and what state it is in; the moment somebody is
+driving, their maps app is better at everything. `features/location/directions.ts`
+builds an Apple Maps URL on iOS, a `geo:` URL on Android so any installed maps
+app can claim it, and falls back to a browser link when nothing answers.
+
+**Coordinates come from the booking snapshot, never the live address.** The
+address is copied onto the booking when it is made. Editing a saved address later
+must not move a job that already happened, so the map reads
+`address_latitude`/`address_longitude` off the booking and not off `Address`.
+
+**Distance is computed on the device.** Haversine, in `features/location/geo.ts`,
+formatted to fifty metres below a kilometre and one decimal place above it. It is
+labelled straight-line, because it is: turning it into a driving distance needs a
+routing service, and multiplying by a fudge factor would present a guess as a
+measurement. **No ETA is shown at all**, for the same reason. A distance that is
+honest beats a travel time that is invented.
+
+**No backend change was required, and none was made.** The coordinate columns,
+their paired validation and the snapshot copy have existed since M1. What was
+missing was anything that ever wrote one: `AddressInput` had no coordinate
+fields, so every address and therefore every booking snapshot carried a null
+pair, and a map built on them would have been empty forever. M9.1 adds the pin
+capture that fills them, through the API as it already stood.
+
+#### The provider location privacy boundary
+
+A provider's position is sensitive operational data, and in M9.1 it is treated
+as such by making it structurally impossible to leak:
+
+- Read **once**, on an explicit tap, never on a screen load and never on a timer.
+- Held in component state for the life of the screen. Not persisted anywhere.
+- **Never sent to the backend.** There is no endpoint that would accept it, and a
+  test asserts the dispatch screen makes no network call at all.
+- Never shown to a customer, never logged, never in analytics. The failure path
+  in `useDeviceLocation` is deliberately silent because a location provider's
+  error message can itself carry coordinates.
+- Foreground only. Background location is disabled explicitly in `app.json`
+  rather than left unset.
+
+Permission is requested on a dispatch screen, on a tap, by somebody who wants the
+answer, and refusing it costs only the distance figure. The job's own location,
+the address, and directions all still work. Nothing about viewing a job requires
+location permission.
+
+#### What the lifecycle changes
+
+Prominence, never availability. The map grows for `ASSIGNED` and `EN_ROUTE`,
+because that is when somebody is travelling. `COMPLETED` keeps its map, since
+"where was that" is a fair question about work you did last week. `CANCELLED` and
+`EXPIRED` lose the navigation actions and keep the location, because offering to
+drive somebody to a job that is not happening is the app being wrong out loud.
+Which status a booking is in comes from the server, and no action here is derived
+from a local guess.
 
 ### Verification handled once
 
@@ -1871,6 +1940,24 @@ fix it. That is the point of doing M3 on a single vertical.
 ## 11. Risks and open decisions
 
 ### Open
+
+0. **Live provider tracking is deliberately not built.** M9.1 stops at a static
+   job location and a distance the provider computes on their own device. Showing
+   a customer where their provider is would need a location endpoint, a model to
+   store positions in, a retention policy, a polling or realtime channel, and a
+   decision about what a customer is entitled to see and for how long. None of
+   those is decided, and the last one is a product and privacy question rather
+   than an engineering one. The current boundary is written down in the dispatch
+   map section above so that building it later is a deliberate choice rather than
+   a drift.
+
+0. **Dispatch has two ends and one coordinate.** A courier booking carries
+   `pickup_landmark` and `dropoff_landmark` as free text, but a booking snapshot
+   holds a single coordinate pair. M9.1 pins the pickup, which is where the rider
+   goes first and the only place they currently need navigating to, and leaves the
+   dropoff as a landmark in the job details. Pinning both ends means new fields on
+   the booking snapshot and a migration, and it is the honest shape for a courier
+   product; it was deferred rather than rejected.
 
 0. **Nothing is credentialed yet.** Every production adapter now exists, and none
    of them has an account behind it. `SMS_BACKEND`, `EMAIL_BACKEND`,

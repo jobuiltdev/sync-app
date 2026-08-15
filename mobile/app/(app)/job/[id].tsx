@@ -4,6 +4,7 @@ import { StyleSheet, View } from 'react-native';
 import { statusLabel } from '@/api/endpoints/bookings';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
+import { DispatchSection } from '@/components/map/DispatchSection';
 import { DetailList, DetailRow, humaniseKey, humaniseValue } from '@/components/ui/DetailList';
 import { Header } from '@/components/ui/Header';
 import { Screen } from '@/components/ui/Screen';
@@ -97,6 +98,15 @@ export default function JobScreen() {
 
       <View style={styles.section}>
         <SectionHeader title="Where" />
+
+        {/* Map first, then the address in words. The map orients; the text is
+            what a provider actually reads out to a gateman. */}
+        <DispatchSection
+          address={job.address}
+          status={job.status}
+          reference={job.reference}
+        />
+
         <Card>
           <View style={styles.address}>
             <Text variant="body" weight="medium">
