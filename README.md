@@ -312,7 +312,15 @@ full account; the parts worth knowing before touching any of it:
   outcome. The message can be rendered again from the domain object.
 
 Locally the console SMS provider and the console email backend print instead of
-sending, so the whole path is exercisable with no account anywhere.
+sending, so the whole path is exercisable with no account anywhere. They print in
+the **worker's** terminal, not the server's, because that is the process doing the
+sending. Verification codes appear there too.
+
+Two things that look like bugs and are not. Nothing is delivered without a worker
+running: the rows sit at `PENDING` while bookings and payments carry on working
+normally. And an account that has not verified a channel receives nothing on it,
+recorded as `SKIPPED`, so register and verify both channels before expecting a
+message.
 
 ## Health
 
