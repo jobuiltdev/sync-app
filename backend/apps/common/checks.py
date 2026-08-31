@@ -40,6 +40,11 @@ PROVIDER_SETTINGS = {
         "verification emails and every booking, payment and payout notice would be "
         "printed to a log instead of sent"
     ),
+    "IDENTITY_PROVIDER": (
+        "provider identity checks would return synthetic passes, so anybody who "
+        "asked would reach a reviewer looking at a result no government register "
+        "ever confirmed"
+    ),
 }
 
 #: Credentials that must be present, keyed by the provider path that needs them.

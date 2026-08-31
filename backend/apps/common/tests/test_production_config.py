@@ -23,6 +23,7 @@ PRODUCTION = {
     "PAYOUT_TRANSFER_PROVIDER": "apps.payments.transfers.paystack.PaystackTransferProvider",
     "SMS_BACKEND": "apps.accounts.sms.termii.TermiiSMSProvider",
     "EMAIL_BACKEND": "apps.accounts.email.resend.ResendEmailBackend",
+    "IDENTITY_PROVIDER": "apps.providers.identity.prembly.PremblyIdentityProvider",
     "PAYSTACK": {"SECRET_KEY": "sk_live_x", "PUBLIC_KEY": "pk_live_x"},
     "TERMII": {"API_KEY": "termii-key", "SENDER_ID": "Sync"},
     "RESEND": {"API_KEY": "resend-key"},
@@ -101,12 +102,25 @@ class ProviderSafetyTests(SimpleTestCase):
     def test_every_fake_is_reported_rather_than_only_the_first(self):
         # An operator fixing one at a time and redeploying five times is a bad
         # afternoon.
-        with override_settings(
-            PAYMENT_GATEWAY="apps.payments.gateways.fake.FakeGateway",
-            BANK_RESOLVER="apps.payments.banks.fake.FakeBankResolver",
-            PAYOUT_TRANSFER_PROVIDER="apps.payments.transfers.fake.FakeTransferProvider",
-        ):
-            self.assertEqual(len(checks.check_providers_are_real(None)), 3)
+        fakes = {
+            "PAYMENT_GATEWAY": "apps.payments.gateways.fake.FakeGateway",
+            "BANK_RESOLVER": "apps.payments.banks.fake.FakeBankResolver",
+            "PAYOUT_TRANSFER_PROVIDER": "apps.payments.transfers.fake.FakeTransferProvider",
+        }
+
+        with override_settings(**fakes):
+            self.assertEqual(len(checks.check_providers_are_real(None)), len(fakes))
+
+    def test_every_provider_setting_is_covered_by_the_refusal(self):
+        # Counted from the table rather than written as a literal. Adding a
+        # provider setting later should extend this test, not break it.
+        fakes = dict.fromkeys(checks.PROVIDER_SETTINGS, "apps.something.fake.Fake")
+
+        with override_settings(**fakes):
+            problems = checks.check_providers_are_real(None)
+
+        self.assertEqual(len(problems), len(checks.PROVIDER_SETTINGS))
+        self.assertTrue(all(isinstance(problem, Error) for problem in problems))
 
     def test_an_unset_provider_is_refused(self):
         with override_settings(PAYMENT_GATEWAY=""):

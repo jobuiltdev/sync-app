@@ -1036,7 +1036,7 @@ modification.
 | Transactional email | Resend | Django's `EMAIL_BACKEND`, `accounts/email/` |
 | SMS | Termii | `accounts/sms/base.py` |
 | Marketplace notifications | the two above | `notifications/service.py`, one entry point |
-| Identity verification | Prembly, Youverify or VerifyMe | `providers/identity/base.py`, not built |
+| Identity verification | Prembly, Youverify or VerifyMe | `providers/identity/base.py`, boundary and fake built |
 | Bank account resolution | Paystack | `payments/banks/base.py` |
 | Google sign-in | ID token verified with `google-auth` | `accounts/social/google.py` |
 | Push | Expo Push | not built. SMS and email carry everything today |
@@ -1192,13 +1192,20 @@ remaining way in, so a Google-only account must set a password first.
 ### Verification challenges, as implemented
 
 `VerificationChallenge` carries a `channel`, so email verification is a new row
-rather than a second verification architecture. Only PHONE is wired up.
+rather than a second verification architecture. Both PHONE and EMAIL are wired up,
+and what differs between them lives in one `ChannelPolicy` rather than in two
+parallel flows.
 
 **The flow.** `PUT /auth/phone/` sets the number, `POST /auth/phone/verification/
-request/` sends a code, `POST /auth/phone/verification/confirm/` submits it. Only a
-correct code sets `phone_verified_at`; no endpoint, serializer or admin field
-writes it, because a customer declaring their own phone verified would make the
-booking gate decorative.
+request/` sends a code, `POST /auth/phone/verification/confirm/` submits it. Email
+follows the same three steps at `/auth/email/verification/request/` and
+`/auth/email/verification/confirm/`. Only a correct code sets `phone_verified_at`
+or `email_verified_at`; no endpoint, serializer or admin field writes either,
+because a customer declaring their own phone verified would make the booking gate
+decorative.
+
+Both are prerequisites for provider identity verification, which refuses to start
+a paid external check until each one is confirmed.
 
 **Only a hash is stored**, produced by the project's configured password hashers,
 so today that is Argon2. An earlier revision of this document specified a keyed

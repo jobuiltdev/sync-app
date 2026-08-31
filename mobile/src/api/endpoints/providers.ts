@@ -1,4 +1,5 @@
 import { api } from '@/api/client';
+import { codeOf } from '@/api/errors';
 
 /**
  * The provider side of an account.
@@ -104,7 +105,126 @@ export const providerKeys = {
   profile: ['provider', 'profile'] as const,
   services: ['provider', 'services'] as const,
   areas: ['provider', 'areas'] as const,
+  verificationChecklist: ['provider', 'verification', 'checklist'] as const,
+  verification: ['provider', 'verification'] as const,
+  verificationHistory: ['provider', 'verification', 'history'] as const,
 };
+
+/**
+ * Identity verification.
+ *
+ * Everything here is read from the server. The app computes no progress of its
+ * own and sends no outcome: the API refuses to accept a status, an outcome, a
+ * reference or a review field, so there is nothing to send even if a screen
+ * tried.
+ *
+ * Nothing in these types carries a NIN, a BVN, a portrait, a token or a vendor
+ * payload, because the server has nowhere to keep one. `masked_identifier` is
+ * four characters and exists so support can say "the one ending 4821".
+ */
+export type CheckStatus = 'PENDING' | 'PASSED' | 'FAILED' | 'UNAVAILABLE';
+
+export type AttemptStatus =
+  | 'DRAFT'
+  | 'CHECKING'
+  | 'CHECK_FAILED'
+  | 'UNDER_REVIEW'
+  | 'APPROVED'
+  | 'REJECTED';
+
+/** What the provider does next, when it is their turn at all. */
+export type ChecklistAction = '' | 'VERIFY_PHONE' | 'VERIFY_EMAIL' | 'START_IDENTITY';
+
+export interface ChecklistItem {
+  key: 'phone' | 'email' | 'identity' | 'biometrics' | 'review';
+  label: string;
+  complete: boolean;
+  action: ChecklistAction;
+}
+
+export interface VerificationChecklist {
+  items: ChecklistItem[];
+  complete: boolean;
+  can_start_identity_check: boolean;
+  /** Why not, when `can_start_identity_check` is false. */
+  blocked_reason:
+    | ''
+    | 'CONTACT_NOT_VERIFIED'
+    | 'ALREADY_APPROVED'
+    | 'SUSPENDED'
+    | 'AWAITING_REVIEW';
+  verification_status: VerificationStatus;
+}
+
+export interface ProviderVerification {
+  id: string;
+  status: AttemptStatus;
+  submitted_at: string | null;
+  identity_check_status: CheckStatus;
+  face_match_status: CheckStatus;
+  liveness_status: CheckStatus;
+  identity_vendor: string;
+  identity_reference: string;
+  identity_method: string;
+  identity_checked_at: string | null;
+  /** Last four characters at most, enforced by a database constraint. */
+  masked_identifier: string;
+  rejection_code: string;
+  consent_notice_version: string;
+  consented_at: string | null;
+  review_note: string;
+  /** Whether a person has decided. Who they were is deliberately not sent. */
+  reviewed: boolean;
+  reviewed_at: string | null;
+  failed_checks: string[];
+  created_at: string;
+}
+
+export interface StartVerificationInput {
+  /** The reference the identity provider hands back after the holder consents
+   *  there. Never a NIN, a BVN or any part of one: the server rejects anything
+   *  with eleven consecutive digits before an adapter ever sees it. */
+  authorization_reference: string;
+  consent: boolean;
+}
+
+export function fetchVerificationChecklist(signal?: AbortSignal) {
+  return api.get<VerificationChecklist>('/api/v1/provider/verification/checklist/', { signal });
+}
+
+/**
+ * The latest attempt, or null when there has never been one.
+ *
+ * Most providers have not started a check, and the server says so with a 404
+ * carrying `NO_VERIFICATION_ATTEMPT`. That is an answer rather than a failure,
+ * so it resolves to null and the screen renders a first-time state instead of
+ * an error.
+ *
+ * Matched on the code rather than on the status. A bare 404 with no envelope is
+ * what a wrong path produces, and that is exactly the routing mistake this file
+ * shipped with once already: swallowing every 404 here would have turned it into
+ * a permanently empty screen with nothing to notice.
+ */
+export function fetchVerification(signal?: AbortSignal): Promise<ProviderVerification | null> {
+  return api
+    .get<ProviderVerification>('/api/v1/provider/verification/', { signal })
+    .catch((error: unknown) => {
+      if (codeOf(error) === 'NO_VERIFICATION_ATTEMPT') return null;
+      throw error;
+    });
+}
+
+export function fetchVerificationHistory(signal?: AbortSignal) {
+  return api.get<ProviderVerification[]>('/api/v1/provider/verification/history/', { signal });
+}
+
+export function startVerification(input: StartVerificationInput) {
+  return api.post<ProviderVerification>('/api/v1/provider/verification/start/', input);
+}
+
+export function resubmitVerification() {
+  return api.post<ProviderVerification>('/api/v1/provider/verification/resubmit/', {});
+}
 
 const STATUS_LABELS: Record<VerificationStatus, string> = {
   PENDING: 'Not submitted yet',

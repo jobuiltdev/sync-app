@@ -29,6 +29,7 @@ import {
   useUpdateProviderProfile,
 } from '@/features/providers/hooks';
 import { verificationStatusView } from '@/features/status/presentation';
+import type { VerificationStatus } from '@/api/endpoints/providers';
 import { NIGERIAN_STATES, stateLabel } from '@/lib/nigeria';
 import { usePalette } from '@/theme/theme';
 import { radii, spacing } from '@/theme/tokens';
@@ -163,6 +164,21 @@ export default function ProviderScreen() {
           </Text>
         ) : null}
       </View>
+
+      {/* Verification, which is the one part of readiness a provider acts on
+          somewhere else. Shown before the gap list because it is the first gate,
+          and because a provider halfway through a check should be able to get
+          back to it without hunting. */}
+      <RowGroup>
+        <ListRow
+          title="Provider verification"
+          subtitle={verificationRowSubtitle(profile.data.verification_status)}
+          icon="shield"
+          iconTone={profile.data.verification_status === 'APPROVED' ? 'success' : 'primary'}
+          onPress={() => router.push('/provider-verification')}
+          chevron
+        />
+      </RowGroup>
 
       {/* Readiness, stated plainly. A provider's first question is always
           "why am I not getting jobs", and this answers it before it is asked. */}
@@ -395,6 +411,35 @@ export default function ProviderScreen() {
       </Sheet>
     </Screen>
   );
+}
+
+/**
+ * One line telling a provider where their approval stands.
+ *
+ * Deliberately not the same wording as the status pill above it. The pill names
+ * the state; this says what it means for them.
+ *
+ * It describes **approval standing only**, because that is the only thing this
+ * screen knows. `verification_status` is the profile lifecycle: it says a person
+ * decided, not which checks ran. An account approved before identity
+ * verification existed carries APPROVED with no NIN, face or liveness check
+ * behind it, so wording like "verified" or "your checks passed" here would be
+ * asserting something no query on this screen has established. The detail screen
+ * loads the attempt and can be specific; this row cannot.
+ */
+function verificationRowSubtitle(status: VerificationStatus): string {
+  switch (status) {
+    case 'APPROVED':
+      return 'Approved by the Sync team. You can take work.';
+    case 'UNDER_REVIEW':
+      return 'With the Sync team. Someone is reviewing it.';
+    case 'REJECTED':
+      return 'Not approved. Read why and submit again.';
+    case 'SUSPENDED':
+      return 'Suspended. Contact support.';
+    default:
+      return 'Not approved yet. Confirm your identity to take work.';
+  }
 }
 
 const styles = StyleSheet.create({

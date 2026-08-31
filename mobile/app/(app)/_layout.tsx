@@ -28,6 +28,7 @@ export default function AppLayout() {
       }}
     >
       <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="provider-verification" />
       {/* Presented from the bottom: a sheet-like screen for a single decision,
           which is what both of these are. */}
       <Stack.Screen name="payout-request" options={{ animation: 'slide_from_bottom' }} />

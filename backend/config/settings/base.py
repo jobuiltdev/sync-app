@@ -192,6 +192,10 @@ SPECTACULAR_SETTINGS = {
         "PayoutStatus": "apps.payments.payouts.PayoutStatus",
         "SettlementStatus": "apps.payments.settlements.SettlementStatus",
         "Currency": "apps.payments.money.Currency",
+        # Three fields on the verification attempt share one choice set. Without
+        # this the generator names the enum after whichever field it met first.
+        "IdentityCheckStatus": "apps.providers.verification.CheckStatus",
+        "VerificationAttemptStatus": "apps.providers.verification.AttemptStatus",
     },
 }
 
@@ -293,6 +297,14 @@ PAYSTACK = {
 # Confirms that a payout destination is a real account before money is sent to
 # it. Paystack resolves account numbers, so the same credentials serve both.
 BANK_RESOLVER = env("BANK_RESOLVER", default="apps.payments.banks.fake.FakeBankResolver")
+
+# Who establishes that a provider is the person they claim to be. Defaults to the
+# fake, which talks to nobody and refuses anything shaped like a real NIN, so the
+# whole provider flow can be walked on a laptop without a vendor contract. A
+# production system check refuses to boot with this default still selected.
+IDENTITY_PROVIDER = env(
+    "IDENTITY_PROVIDER", default="apps.providers.identity.fake.FakeIdentityProvider"
+)
 
 # --- background work ------------------------------------------------------
 # Celery over the Redis that is already here for the cache, which is what

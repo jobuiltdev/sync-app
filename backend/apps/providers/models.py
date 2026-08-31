@@ -198,3 +198,25 @@ class ProviderServiceArea(BaseModel):
 
     def __str__(self) -> str:
         return f"{self.get_state_display()}{f' / {self.lga}' if self.lga else ''}"
+
+
+# Imported here so Django discovers it. The attempt model lives in its own module
+# because it owns a lifecycle of its own, the same arrangement `payments` uses.
+from apps.providers.verification import (  # noqa: E402  (circular by design)
+    AttemptStatus,
+    CheckStatus,
+    ProviderVerification,
+)
+
+__all__ = [
+    "ALLOWED_TRANSITIONS",
+    "AttemptStatus",
+    "CheckStatus",
+    "IllegalTransition",
+    "ProviderProfile",
+    "ProviderService",
+    "ProviderServiceArea",
+    "ProviderVerification",
+    "VerificationStatus",
+    "can_transition",
+]

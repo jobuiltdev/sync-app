@@ -25,6 +25,7 @@ PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 # stops a misconfigured machine reaching a real provider from a test run.
 PAYMENT_GATEWAY = "apps.payments.gateways.fake.FakeGateway"
 BANK_RESOLVER = "apps.payments.banks.fake.FakeBankResolver"
+IDENTITY_PROVIDER = "apps.providers.identity.fake.FakeIdentityProvider"
 SMS_BACKEND = "apps.accounts.sms.locmem.LocMemSMSProvider"
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 

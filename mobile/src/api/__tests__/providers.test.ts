@@ -3,12 +3,19 @@ import {
   type ProviderProfile,
   type ProviderService,
   type ProviderServiceArea,
+  type ProviderVerification,
+  type VerificationChecklist,
   addProviderArea,
   addProviderService,
   createProviderProfile,
   eligibilityGaps,
   fetchProviderProfile,
+  fetchVerification,
+  fetchVerificationChecklist,
+  fetchVerificationHistory,
   removeProviderService,
+  resubmitVerification,
+  startVerification,
   updateProviderProfile,
   verificationStatusLabel,
 } from '@/api/endpoints/providers';
@@ -54,6 +61,52 @@ const SERVICE: ProviderService = {
 };
 
 const AREA: ProviderServiceArea = { id: 'a1', state: 'LAGOS', lga: '' };
+
+const CHECKLIST: VerificationChecklist = {
+  items: [
+    { key: 'phone', label: 'Phone number confirmed', complete: true, action: '' },
+    { key: 'email', label: 'Email address confirmed', complete: true, action: '' },
+    {
+      key: 'identity',
+      label: 'Identity confirmed with NIMC',
+      complete: false,
+      action: 'START_IDENTITY',
+    },
+    {
+      key: 'biometrics',
+      label: 'Face match and liveness',
+      complete: false,
+      action: 'START_IDENTITY',
+    },
+    { key: 'review', label: 'Reviewed by the Sync team', complete: false, action: '' },
+  ],
+  complete: false,
+  can_start_identity_check: true,
+  blocked_reason: '',
+  verification_status: 'PENDING',
+};
+
+const ATTEMPT: ProviderVerification = {
+  id: 'v1',
+  status: 'UNDER_REVIEW',
+  submitted_at: '2026-08-26T10:05:00Z',
+  identity_check_status: 'PASSED',
+  face_match_status: 'PASSED',
+  liveness_status: 'PASSED',
+  identity_vendor: 'fake',
+  identity_reference: 'FAKE-0123456789ABCDEF',
+  identity_method: 'NIN',
+  identity_checked_at: '2026-08-26T10:05:00Z',
+  masked_identifier: '4821',
+  rejection_code: '',
+  consent_notice_version: '2026-08-v1',
+  consented_at: '2026-08-26T10:04:00Z',
+  review_note: '',
+  reviewed: false,
+  reviewed_at: null,
+  failed_checks: [],
+  created_at: '2026-08-26T10:04:00Z',
+};
 
 describe('provider api', () => {
   const originalFetch = globalThis.fetch;
@@ -253,5 +306,153 @@ describe('eligibilityGaps', () => {
     );
 
     expect(gaps).toHaveLength(5);
+  });
+});
+
+/**
+ * Verification routing.
+ *
+ * These five shipped without the `/api/v1` prefix while every other call in the
+ * same module had it, so each one reached Django's 404 handler and the whole
+ * feature was dead on a device while every unit test still passed. Nothing here
+ * asserted a URL, so nothing caught it.
+ *
+ * The assertions below are deliberately whole absolute URLs rather than a
+ * `toContain('verification')`, because the missing half is exactly the half a
+ * substring match would have skipped over.
+ */
+describe('verification endpoints address the versioned API', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    process.env.EXPO_PUBLIC_API_URL = BASE_URL;
+    resetAuthPlumbing();
+    setAccessTokenProvider(() => 'token');
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  it('reads the checklist from the full path', async () => {
+    const fetchMock = mockFetch(jsonResponse(200, CHECKLIST));
+
+    await fetchVerificationChecklist();
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      `${BASE_URL}/api/v1/provider/verification/checklist/`,
+    );
+  });
+
+  it('reads the latest attempt from the full path', async () => {
+    const fetchMock = mockFetch(jsonResponse(200, ATTEMPT));
+
+    await fetchVerification();
+
+    expect(fetchMock.mock.calls[0][0]).toBe(`${BASE_URL}/api/v1/provider/verification/`);
+  });
+
+  it('reads the history from the full path', async () => {
+    const fetchMock = mockFetch(jsonResponse(200, [ATTEMPT]));
+
+    await fetchVerificationHistory();
+
+    expect(fetchMock.mock.calls[0][0]).toBe(`${BASE_URL}/api/v1/provider/verification/history/`);
+  });
+
+  it('starts a check at the full path, with POST', async () => {
+    const fetchMock = mockFetch(jsonResponse(201, ATTEMPT));
+
+    await startVerification({ authorization_reference: 'sync-fake-pass', consent: true });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`${BASE_URL}/api/v1/provider/verification/start/`);
+    expect(init.method).toBe('POST');
+  });
+
+  it('resubmits at the full path, with POST', async () => {
+    const fetchMock = mockFetch(jsonResponse(201, ATTEMPT));
+
+    await resubmitVerification();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`${BASE_URL}/api/v1/provider/verification/resubmit/`);
+    expect(init.method).toBe('POST');
+  });
+
+  it('leaves no verification call on an unversioned path', async () => {
+    // The regression itself, stated once over all five rather than five times.
+    // A new endpoint added without the prefix fails here even if whoever added
+    // it wrote no URL assertion of its own.
+    const calls: string[] = [];
+    const fetchMock = jest.fn().mockImplementation((url: string) => {
+      calls.push(url);
+      return Promise.resolve(jsonResponse(200, ATTEMPT));
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await fetchVerificationChecklist();
+    await fetchVerification();
+    await fetchVerificationHistory();
+    await startVerification({ authorization_reference: 'sync-fake-pass', consent: true });
+    await resubmitVerification();
+
+    expect(calls).toHaveLength(5);
+    for (const url of calls) {
+      expect(url.startsWith(`${BASE_URL}/api/v1/provider/verification/`)).toBe(true);
+    }
+  });
+});
+
+describe('a provider who has never started a check', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    process.env.EXPO_PUBLIC_API_URL = BASE_URL;
+    resetAuthPlumbing();
+    setAccessTokenProvider(() => 'token');
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
+
+  it('reads as null rather than as a failure', async () => {
+    mockFetch(
+      jsonResponse(404, {
+        error: {
+          code: 'NO_VERIFICATION_ATTEMPT',
+          message: 'This provider has not started verification.',
+          details: {},
+        },
+      }),
+    );
+
+    await expect(fetchVerification()).resolves.toBeNull();
+  });
+
+  it('still fails on a 404 that is not that answer', async () => {
+    // A bare 404 is what a wrong path produces, and Django answers it with HTML
+    // rather than the envelope. Swallowing it would have hidden the routing bug
+    // these tests exist for: the screen would have shown an empty first-time
+    // state forever and nothing would have looked broken.
+    mockFetch(new Response('<h1>Not Found</h1>', { status: 404 }));
+
+    await expect(fetchVerification()).rejects.toMatchObject({
+      code: 'UNEXPECTED_RESPONSE',
+      status: 404,
+    });
+  });
+
+  it('still fails on a real server error', async () => {
+    mockFetch(
+      jsonResponse(500, {
+        error: { code: 'INTERNAL', message: 'Something went wrong.', details: {} },
+      }),
+    );
+
+    await expect(fetchVerification()).rejects.toMatchObject({ code: 'INTERNAL' });
   });
 });
