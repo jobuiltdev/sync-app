@@ -20,7 +20,10 @@ import {
   type SpecValue,
   buildSpecSchema,
   initialSpecValues,
+  optionsDeltaKobo,
   toRequestDetails,
+  toSpecFieldErrors,
+  withDrafts,
 } from '@/features/bookings/spec-form';
 import { toVerificationBlock } from '@/features/bookings/verification';
 import { useAddresses, useService, useServiceProviders } from '@/features/catalog/hooks';
@@ -51,6 +54,9 @@ export default function BookServiceScreen() {
 
   const schema = service.data?.details_schema;
   const [values, setValues] = useState<Record<string, SpecValue>>({});
+  // Text typed into a list field but not yet added. Held here so that submitting
+  // counts it rather than throwing it away.
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [addressId, setAddressId] = useState<string | null>(null);
   const [providerId, setProviderId] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -68,11 +74,31 @@ export default function BookServiceScreen() {
 
   const verification = toVerificationBlock(create.error);
   const apiErrors = verification ? { fields: {}, message: null } : toFormErrors(create.error);
+  // Errors the server raised against the vertical's own fields. They arrive one
+  // level deeper than the generic mapper looks, so without this a rejected
+  // booking showed nothing anywhere on the screen.
+  const specErrors = verification ? {} : toSpecFieldErrors(create.error);
+  const shownErrors = { ...specErrors, ...fieldErrors };
+
+  // One line beside the button. The banner at the top of the form is out of
+  // sight by the time somebody reaches the action on a long spec, so a rejection
+  // that only rendered up there read as nothing happening at all.
+  // Covers a local rejection too: the form can refuse to submit without the
+  // customer seeing why, if the offending field has scrolled off screen.
+  const failure =
+    Object.keys(shownErrors).length > 0
+      ? 'Check the highlighted answers above.'
+      : create.isError
+        ? (apiErrors.message ?? 'That did not go through. Please try again.')
+        : null;
 
   function submit() {
     if (!service.data || !chosenAddress || !chosenProvider) return;
 
-    const parsed = specSchema.safeParse(current);
+    // Anything half-typed into a list field counts as an answer.
+    const answers = withDrafts(schema, current, drafts);
+
+    const parsed = specSchema.safeParse(answers);
     if (!parsed.success) {
       const next: Record<string, string> = {};
       for (const issue of parsed.error.issues) {
@@ -89,7 +115,7 @@ export default function BookServiceScreen() {
         service_slug: service.data.slug,
         provider_id: chosenProvider.id,
         address_id: chosenAddress.id,
-        details: toRequestDetails(schema, current),
+        details: toRequestDetails(schema, answers),
       },
       { onSuccess: (booking) => router.replace(`/booking/${booking.id}`) },
     );
@@ -122,9 +148,15 @@ export default function BookServiceScreen() {
   const hasProvider = available.length > 0;
   const ready = hasAddress && hasProvider;
   // What the customer will actually be charged, once a provider is chosen: their
-  // price, not the service's base. Still only a preview. The booking's real
-  // total is fixed by the server when it is created.
-  const preview = chosenProvider?.price_kobo ?? service.data.base_price_kobo;
+  // price, not the service's base, plus whatever their answers add. A deep clean
+  // costs more than a standard one, and the footer says so the moment they tap
+  // it rather than after they have booked.
+  //
+  // Still a preview. The booking's real total is fixed by the server, from the
+  // same option rows this figure is built from.
+  const base = chosenProvider?.price_kobo ?? service.data.base_price_kobo;
+  const extras = optionsDeltaKobo(schema, current);
+  const preview = base + extras;
 
   return (
     <Screen
@@ -133,12 +165,17 @@ export default function BookServiceScreen() {
           <>
             <View style={styles.total}>
               <Text variant="footnote" tone="muted">
-                Total
+                {extras ? `Total, including ${formatNaira(extras)} extras` : 'Total'}
               </Text>
               <Text variant="price" weight="bold">
                 {formatNaira(preview)}
               </Text>
             </View>
+            {failure ? (
+              <Text variant="caption" tone="danger" accessibilityRole="alert">
+                {failure}
+              </Text>
+            ) : null}
             <Button
               label="Book this service"
               loading={create.isPending}
@@ -231,8 +268,10 @@ export default function BookServiceScreen() {
             <SpecFields
               schema={schema}
               values={current}
-              errors={fieldErrors}
+              errors={shownErrors}
               onChange={(name, value) => setValues((prev) => ({ ...prev, [name]: value }))}
+              drafts={drafts}
+              onDraftChange={(name, draft) => setDrafts((prev) => ({ ...prev, [name]: draft }))}
             />
           </Card>
         </View>

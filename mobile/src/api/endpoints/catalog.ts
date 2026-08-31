@@ -42,6 +42,22 @@ export interface DetailsField {
   required: boolean;
   label: string;
   choices: string[] | null;
+  /** One line under the field. Written by the vertical, not by the app. */
+  help_text: string;
+  /** How to render, never what to say. `yes_no` for a boolean that reads better
+   *  as two buttons than a switch, `cards` for choices that need explaining,
+   *  `multiline` for prose. Anything unrecognised falls back to the default. */
+  style: string;
+  placeholder: string;
+  hint: string;
+  /** Human labels for raw choice values, where the value is not presentable. */
+  choice_labels: Record<string, string>;
+  /** A line explaining each choice, for `cards`. */
+  choice_help: Record<string, string>;
+  /** What each answer adds to the price, in kobo. Keyed by choice value, or by
+   *  `"true"` for a boolean. Absent means it costs nothing. The server computes
+   *  the binding figure from the same mapping. */
+  price_deltas: Record<string, number>;
 }
 
 export interface DetailsSchema {

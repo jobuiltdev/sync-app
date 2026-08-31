@@ -25,7 +25,29 @@ from dataclasses import dataclass, field
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from apps.catalog.models import BookingMode, PricingModel, Service, ServiceCategory
+from apps.catalog.models import (
+    BookingMode,
+    PricingModel,
+    Service,
+    ServiceCategory,
+    ServiceOption,
+)
+from apps.catalog.specs.verticals import DEEP_CLEAN_OPTION, EXPRESS_OPTION
+
+
+@dataclass(frozen=True)
+class SeedOption:
+    """A priced answer, not an add-on checkbox.
+
+    The spec's `option_keys` decides when one applies. Keeping the amount here
+    rather than in code means what a deep clean costs is a catalog fact that
+    operations can change, which is the same status as every other price.
+    """
+
+    key: str
+    label: str
+    price_delta_kobo: int
+    kind: str = "CHOICE"
 
 
 @dataclass(frozen=True)
@@ -38,6 +60,7 @@ class SeedService:
     base_price_kobo: int
     booking_modes: str = BookingMode.BOTH
     description: str = ""
+    options: list[SeedOption] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -103,21 +126,34 @@ CATALOG: list[SeedCategory] = [
         description="Homes and offices, standard or deep.",
         icon_key="cleaning",
         services=[
+            # One row, not two. "Standard Clean" and "Deep Clean" led to the same
+            # form, which already asked for depth, so a customer chose between
+            # two names before being told what either included, and then answered
+            # the question again inside.
+            #
+            # The slug stays `standard-clean` because bookings point at it. A new
+            # slug would have orphaned the history behind a row nobody browses.
             SeedService(
                 slug="standard-clean",
-                name="Standard Clean",
-                summary="Regular upkeep for a home or office.",
+                name="Cleaning",
+                summary="Homes and offices. Choose standard or deep when you book.",
                 spec_key="cleaning",
                 pricing_model=PricingModel.FIXED,
                 base_price_kobo=1_500_000,
-            ),
-            SeedService(
-                slug="deep-clean",
-                name="Deep Clean",
-                summary="Top to bottom, including the places a standard clean skips.",
-                spec_key="cleaning",
-                pricing_model=PricingModel.FIXED,
-                base_price_kobo=3_500_000,
+                description=(
+                    "A standard clean is routine upkeep. A deep clean covers the "
+                    "same ground and adds the places routine cleaning skips."
+                ),
+                options=[
+                    # 35,000 less 15,000: the two prices this category already
+                    # charged, carried across so nothing was repriced by merging
+                    # the rows.
+                    SeedOption(
+                        key=DEEP_CLEAN_OPTION,
+                        label="Deep cleaning",
+                        price_delta_kobo=2_000_000,
+                    ),
+                ],
             ),
         ],
     ),
@@ -193,10 +229,37 @@ CATALOG: list[SeedCategory] = [
                 spec_key="laundry",
                 pricing_model=PricingModel.PER_ITEM,
                 base_price_kobo=50_000,
+                options=[
+                    # Flat, not a percentage. Turning a load around in 24 hours
+                    # costs the same whether it is five shirts or fifty, so a
+                    # percentage would have charged the largest orders most for
+                    # the thing that scales least.
+                    SeedOption(
+                        key=EXPRESS_OPTION,
+                        label="Express turnaround",
+                        price_delta_kobo=300_000,
+                        kind="BOOLEAN",
+                    ),
+                ],
             ),
         ],
     ),
 ]
+
+
+#: Services that were once sold and are not any more.
+#:
+#: Deactivated on every run, never deleted: each of these is the foreign key on
+#: somebody's booking, and history has to keep resolving. Listing them here is
+#: what stops a withdrawn service quietly coming back the next time somebody
+#: reseeds.
+RETIRED_SERVICE_SLUGS: tuple[str, ...] = (
+    # Merged into `standard-clean`, which now asks for depth instead.
+    "deep-clean",
+    # Superseded by `home-services`; it named one trade while its form asked for
+    # four. Already inactive, kept here so it stays that way.
+    "plumbing-callout",
+)
 
 
 class Command(BaseCommand):
@@ -234,7 +297,7 @@ class Command(BaseCommand):
             updated += not was_created
 
             for service_order, service in enumerate(seed.services, start=1):
-                _, service_created = Service.objects.update_or_create(
+                row, service_created = Service.objects.update_or_create(
                     slug=service.slug,
                     defaults={
                         "category": category,
@@ -253,6 +316,23 @@ class Command(BaseCommand):
                 created += service_created
                 updated += not service_created
 
+                for option_order, option in enumerate(service.options, start=1):
+                    ServiceOption.objects.update_or_create(
+                        service=row,
+                        key=option.key,
+                        defaults={
+                            "label": option.label,
+                            "kind": option.kind,
+                            "price_delta_kobo": option.price_delta_kobo,
+                            "sort_order": option_order,
+                            "is_active": True,
+                        },
+                    )
+
+        retired = Service.objects.filter(slug__in=RETIRED_SERVICE_SLUGS, is_active=True).update(
+            is_active=False
+        )
+
         pruned = 0
         if options["prune"]:
             pruned += (
@@ -269,6 +349,7 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f"Catalog seeded: {created} created, {updated} updated"
+                + (f", {retired} retired" if retired else "")
                 + (f", {pruned} deactivated" if options["prune"] else "")
             )
         )

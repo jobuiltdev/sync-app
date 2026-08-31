@@ -134,9 +134,19 @@ class HomeServicesTradeTests(TestCase):
         their own fault before we would take it."""
         from apps.catalog.specs.verticals import HomeServicesDetailsSerializer
 
-        choices = HomeServicesDetailsSerializer().fields["trade"].choices
+        choices = set(HomeServicesDetailsSerializer().fields["trade"].choices)
 
-        self.assertEqual(set(choices), {"PLUMBING", "ELECTRICAL", "CARPENTRY", "PAINTING"})
+        # The point of this test: neither is a trade of its own. Both are done by
+        # an electrician, and offering them separately made the customer diagnose
+        # their own fault before we would take the job.
+        self.assertNotIn("AC", choices)
+        self.assertNotIn("AIR_CONDITIONING", choices)
+        self.assertNotIn("APPLIANCE", choices)
+        self.assertNotIn("APPLIANCE_REPAIR", choices)
+
+        # OTHER is not a trade either. It is the escape hatch for a job that is
+        # none of the four, and it makes the description carry the meaning.
+        self.assertEqual(choices, {"PLUMBING", "ELECTRICAL", "CARPENTRY", "PAINTING", "OTHER"})
 
     def test_the_remaining_trades_still_validate(self):
         from apps.catalog.specs.verticals import HomeServicesDetailsSerializer

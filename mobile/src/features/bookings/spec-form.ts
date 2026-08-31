@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { DetailsField, DetailsSchema } from '@/api/endpoints/catalog';
+import { isApiError } from '@/api/errors';
 
 /**
  * Turns a service's field schema into a form.
@@ -18,8 +19,17 @@ function fieldSchema(field: DetailsField): z.ZodTypeAny {
       return z.boolean();
 
     case 'integer':
-      // Text inputs hand back strings, so coerce before validating.
-      return z.coerce.number({ error: `${field.label} must be a number.` }).int();
+      // Text inputs hand back strings, so coerce before validating. Blank is
+      // rejected first, because `Number('')` is 0: without this an untouched
+      // number field passes here, is sent as an empty string, and comes back a
+      // 400 the customer never asked for.
+      return z
+        .union([z.number(), z.string()])
+        .transform((value) => String(value).trim())
+        .refine((value) => value !== '', `${field.label} is required.`)
+        .refine((value) => Number.isFinite(Number(value)), `${field.label} must be a number.`)
+        .transform(Number)
+        .refine(Number.isInteger, `${field.label} must be a whole number.`);
 
     case 'choice':
       return field.choices && field.choices.length > 0
@@ -82,6 +92,90 @@ export function initialSpecValues(schema: DetailsSchema | undefined): Record<str
   }
 
   return values;
+}
+
+/**
+ * Per-field messages from a rejected `details` payload.
+ *
+ * The spec's errors arrive nested, because `details` is one field of the booking
+ * request and the vertical's own fields sit inside it:
+ *
+ *   {"error": {"details": {"fields": {"details": {"item_count": ["..."]}}}}}
+ *
+ * The generic form mapper reads one level and finds an object where it expects a
+ * string, so it produced no field error and no banner. A rejected booking then
+ * rendered as nothing at all: the button stopped spinning and the screen sat
+ * there, which is exactly what a customer reports as "it just loads and stops".
+ */
+export function toSpecFieldErrors(error: unknown): Record<string, string> {
+  if (!isApiError(error) || error.code !== 'VALIDATION_ERROR') return {};
+
+  const fields = error.details.fields as Record<string, unknown> | undefined;
+  const nested = fields?.details;
+  if (typeof nested !== 'object' || nested === null) return {};
+
+  const result: Record<string, string> = {};
+  for (const [name, messages] of Object.entries(nested as Record<string, unknown>)) {
+    const first = Array.isArray(messages) ? messages[0] : messages;
+    if (typeof first === 'string') result[name] = first;
+  }
+
+  return result;
+}
+
+/**
+ * What the current answers add to the base price, in kobo.
+ *
+ * Read from the schema the server served, which derives it from the same option
+ * rows the server bills from. The app never works out a surcharge of its own, so
+ * the figure in the footer and the figure on the booking cannot disagree.
+ */
+export function optionsDeltaKobo(
+  schema: DetailsSchema | undefined,
+  values: Record<string, SpecValue>,
+): number {
+  if (!schema) return 0;
+
+  let total = 0;
+  for (const field of schema.fields) {
+    const deltas = field.price_deltas;
+    if (!deltas) continue;
+
+    const value = values[field.name];
+    if (value === undefined || value === '' || value === false) continue;
+
+    total += deltas[String(value)] ?? 0;
+  }
+
+  return total;
+}
+
+/**
+ * Folds half-typed list entries into the answers before they are used.
+ *
+ * Somebody who types a treatment and taps Book without pressing Add has told us
+ * what they want. Discarding it because they did not press the right button
+ * loses real input silently, which is worse than accepting it.
+ */
+export function withDrafts(
+  schema: DetailsSchema | undefined,
+  values: Record<string, SpecValue>,
+  drafts: Record<string, string>,
+): Record<string, SpecValue> {
+  if (!schema) return values;
+
+  const merged = { ...values };
+  for (const field of schema.fields) {
+    if (field.type !== 'list') continue;
+
+    const pending = (drafts[field.name] ?? '').trim();
+    if (!pending) continue;
+
+    const current = merged[field.name];
+    merged[field.name] = [...(Array.isArray(current) ? current : []), pending];
+  }
+
+  return merged;
 }
 
 /** Strips blanks the user never filled in, so optional fields are omitted rather

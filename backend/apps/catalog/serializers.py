@@ -59,8 +59,12 @@ class ServiceDetailSerializer(serializers.ModelSerializer):
 
         Served from the spec so the mobile request form is driven by the API. A new
         vertical becomes available to the app without shipping a new build.
+
+        The service is passed in because two things vary within one spec: the
+        examples (nails and hair share a spec but not a vocabulary) and the price
+        each answer adds, which comes from this service's own option rows.
         """
-        return service.spec.details_schema()
+        return service.spec.details_schema(service)
 
 
 class ServiceProviderSerializer(serializers.Serializer):

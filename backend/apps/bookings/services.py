@@ -41,7 +41,30 @@ class ProviderUnavailable(APIError):
     default_detail = "That provider is not available for this service in your area."
 
 
-def agreed_price_kobo(service: Service, provider: ProviderProfile | None) -> int:
+def options_delta_kobo(service: Service, details: dict | None) -> int:
+    """What the answers on this request add to the base price.
+
+    The spec says which priced options an answer selects; the catalog says what
+    each is worth. Neither this function nor the spec knows a number, so changing
+    what a deep clean costs is an admin edit rather than a deploy.
+
+    An option the spec names but nobody has priced contributes nothing. That is
+    how express laundry behaves today: wired, unpriced, free.
+    """
+    keys = service.spec.option_keys(details or {})
+    if not keys:
+        return 0
+
+    return sum(
+        service.options.filter(key__in=keys, is_active=True).values_list(
+            "price_delta_kobo", flat=True
+        )
+    )
+
+
+def agreed_price_kobo(
+    service: Service, provider: ProviderProfile | None, details: dict | None = None
+) -> int:
     """What this booking costs, decided once, at the moment it is requested.
 
     A customer who named a provider is quoted that provider's price, override
@@ -51,17 +74,23 @@ def agreed_price_kobo(service: Service, provider: ProviderProfile | None) -> int
     review screen was never binding, which is a worse promise than a provider
     occasionally earning their catalog rate instead of their override.
 
+    On top of that sits whatever the request itself selected: a deep clean costs
+    more than a standard one because of the answer, not because it is a different
+    service. `details` is optional so that every existing caller keeps its current
+    behaviour, which is the base price and nothing else.
+
     Returns kobo, always an integer. There is no floating point anywhere in the
     money path, here or downstream.
     """
     from apps.providers.models import ProviderService
 
+    base = service.base_price_kobo
     if provider is not None:
         offering = ProviderService.objects.filter(provider=provider, service=service).first()
         if offering is not None:
-            return offering.effective_price_kobo
+            base = offering.effective_price_kobo
 
-    return service.base_price_kobo
+    return base + options_delta_kobo(service, details)
 
 
 def transition(
@@ -212,7 +241,7 @@ def create_booking(
         details=details,
         scheduled_for=scheduled_for,
         status=BookingStatus.MATCHING,
-        total_kobo=agreed_price_kobo(service, provider),
+        total_kobo=agreed_price_kobo(service, provider, details),
     )
     booking.snapshot_address(address)
     booking.save()
