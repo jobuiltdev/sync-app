@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 114 34" fill="none" role="img" aria-labelledby="title">
+  <title id="title">Sync horizontal lockup, dark mode</title>
+  <rect width="114" height="34" fill="#14110E"/>
+  <g transform="scale(0.53125)">
+    <g stroke="#F0794A" stroke-linecap="round" stroke-linejoin="round">
+      <path id="route-upper" d="M47 12H31C20 12 13 20 13 30C13 39 20 44 29 44" stroke-width="7"/>
+      <path id="route-lower" d="M28 27C40 27 49 34 49 43C49 52 42 55 32 55H17" stroke-width="7"/>
+      <circle id="node-upper" cx="52" cy="12" r="4" stroke-width="4"/>
+      <circle id="node-lower" cx="12" cy="55" r="4" stroke-width="4"/>
+    </g>
+  </g>
+  <g transform="translate(45 6.65)">
+    <g stroke="#FAF7F3" stroke-linecap="round" stroke-linejoin="round">
+      <path id="letter-s" d="M12.5 5.35C12.5 2.96 10.5 1.5 7 1.5C3.5 1.5 1.5 2.96 1.5 5.35C1.5 7.75 3.5 8.79 7 10.35C10.5 11.91 12.5 12.95 12.5 15.35C12.5 17.74 10.5 19.2 7 19.2C3.5 19.2 1.5 17.74 1.5 15.35" stroke-width="3"/>
+      <path id="letter-y" d="M19.7 1.85L25.7 9.85L31.7 1.85M25.7 9.85V18.85" stroke-width="3"/>
+      <path id="letter-n" d="M38.1 18.85V1.85L49.1 18.85V1.85" stroke-width="3"/>
+      <path id="letter-c" d="M67.4 4.73C66.2 2.44 64.5 1.5 62.4 1.5C59.3 1.5 56.9 5.46 56.9 10.35C56.9 15.24 59.3 19.2 62.4 19.2C64.5 19.2 66.2 18.26 67.4 15.97" stroke-width="3"/>
+    </g>
+  </g>
+</svg>

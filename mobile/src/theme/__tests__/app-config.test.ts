@@ -14,6 +14,7 @@
  */
 
 import appConfig from '../../../app.json';
+import { darkPalette, lightPalette } from '@/theme/tokens';
 
 /** The plugin entry for a package, as a plain shape. The JSON import gives each
  *  entry a precise literal type, which is more than a config assertion needs. */
@@ -55,5 +56,30 @@ describe('app.json appearance', () => {
 
   it('stays on the pinned Expo SDK', () => {
     expect(appConfig.expo.name).toBe('Sync');
+  });
+});
+
+describe('native splash', () => {
+  const splash = () => pluginConfig('expo-splash-screen')!;
+
+  it('matches the light ground exactly', () => {
+    // The native splash and the first React Native frame have to be the same
+    // colour or the handoff shows a seam. These were left on the pre-M9 palette
+    // until this milestone.
+    expect(splash().backgroundColor).toBe(lightPalette.ground);
+  });
+
+  it('has a dark variant matching the dark ground', () => {
+    const dark = splash().dark as Record<string, unknown>;
+
+    expect(dark).toBeDefined();
+    expect(dark.backgroundColor).toBe(darkPalette.ground);
+  });
+
+  it('uses no colour that is not a palette ground', () => {
+    const dark = splash().dark as Record<string, unknown>;
+    const used = [splash().backgroundColor, dark.backgroundColor];
+
+    expect(used).toEqual([lightPalette.ground, darkPalette.ground]);
   });
 });

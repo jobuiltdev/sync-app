@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" fill="none" role="img" aria-labelledby="title">
+  <title id="title">Sync app icon — light mode</title>
+  <rect width="80" height="80" rx="18" fill="#FAF7F3"/>
+  <g transform="translate(8 8)" stroke="#B54A22" stroke-linecap="round" stroke-linejoin="round">
+    <path id="route-upper" d="M47 12H31C20 12 13 20 13 30C13 39 20 44 29 44" stroke-width="7"/>
+    <path id="route-lower" d="M28 27C40 27 49 34 49 43C49 52 42 55 32 55H17" stroke-width="7"/>
+    <circle id="node-upper" cx="52" cy="12" r="4" stroke-width="4"/>
+    <circle id="node-lower" cx="12" cy="55" r="4" stroke-width="4"/>
+  </g>
+</svg>

@@ -26,15 +26,35 @@ export const SMALL_METRICS: Metrics = {
   insets: { top: 20, left: 0, right: 0, bottom: 0 },
 };
 
-export function renderWithProviders(
+export async function renderWithProviders(
   ui: ReactElement,
   options: { mode?: ThemeMode; metrics?: Metrics } = {},
 ) {
   const { mode = 'light', metrics = METRICS } = options;
 
-  return render(
+  const wrap = (node: ReactElement) => (
     <SafeAreaProvider initialMetrics={metrics}>
-      <ThemeProvider initialMode={mode}>{ui}</ThemeProvider>
-    </SafeAreaProvider>,
+      <ThemeProvider initialMode={mode}>{node}</ThemeProvider>
+    </SafeAreaProvider>
   );
+
+  // Awaited here rather than by the caller. `render` resolves to the result
+  // object, so attaching to the promise would put these on something every
+  // caller immediately discards.
+  const result = await render(wrap(ui));
+
+  // Captured before the property is replaced, or the replacement calls itself.
+  const rerenderRoot = result.rerender.bind(result);
+
+  return Object.assign(result, {
+    /**
+     * Re-renders with new props while keeping the same providers.
+     *
+     * The bare `rerender` swaps the root element, which drops the provider
+     * wrapper and remounts the subject with fresh state. That is invisible in
+     * most tests and quietly fatal in any test about state surviving a prop
+     * change, so this re-wraps instead.
+     */
+    rerender: (next: ReactElement) => rerenderRoot(wrap(next)),
+  });
 }

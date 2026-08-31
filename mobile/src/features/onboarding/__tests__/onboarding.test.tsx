@@ -3,6 +3,10 @@ import { Text as RNText } from 'react-native';
 
 import { useOnboarding, resetOnboarding } from '@/features/onboarding/hooks';
 import { ONBOARDING_STORAGE_KEY, SLIDES } from '@/features/onboarding/slides';
+import {
+  resetOnboardingHydration,
+  useOnboardingStore,
+} from '@/features/onboarding/store';
 import { secureStorage } from '@/lib/secure-storage';
 import { renderWithProviders } from '@/test-utils/render';
 
@@ -21,7 +25,17 @@ function Probe() {
 
 beforeEach(async () => {
   await resetOnboarding();
+  // Hydration is now owned by the store and runs once per app launch, driven
+  // from the root layout rather than from whichever component happened to call
+  // the hook first. Each test starts from a fresh lifecycle.
+  resetOnboardingHydration();
+  await secureStorage.remove(ONBOARDING_STORAGE_KEY);
 });
+
+/** What the root layout does at launch, via `useStartup`. */
+async function hydrate() {
+  await useOnboardingStore.getState().hydrate();
+}
 
 describe('the slides', () => {
   it('describes what the app does rather than how to use it', () => {
@@ -57,7 +71,18 @@ describe('the slides', () => {
 });
 
 describe('showing it once', () => {
+  it('reports loading until the flag has been read', async () => {
+    const view = await renderWithProviders(<Probe />);
+
+    // Consumers no longer trigger their own read, so before the launch
+    // hydration runs the honest answer is "not known yet".
+    expect(view.getByTestId('state')).toHaveTextContent('loading');
+  });
+
   it('is needed on a first launch', async () => {
+    await act(async () => {
+      await hydrate();
+    });
     const view = await renderWithProviders(<Probe />);
 
     await waitFor(() => expect(view.getByTestId('state')).toHaveTextContent('needed'));
@@ -65,13 +90,56 @@ describe('showing it once', () => {
 
   it('is not needed once it has been seen', async () => {
     await secureStorage.set(ONBOARDING_STORAGE_KEY, 'true');
+    await act(async () => {
+      await hydrate();
+    });
 
     const view = await renderWithProviders(<Probe />);
 
     await waitFor(() => expect(view.getByTestId('state')).toHaveTextContent('seen'));
   });
 
+  it('reads the keychain once however many consumers mount', async () => {
+    // The reason this became a store. Two components calling the hook used to
+    // mean two reads and two independent state machines.
+    const spy = jest.spyOn(secureStorage, 'get');
+
+    await act(async () => {
+      await Promise.all([hydrate(), hydrate(), hydrate()]);
+    });
+
+    const reads = spy.mock.calls.filter(([key]) => key === ONBOARDING_STORAGE_KEY);
+    expect(reads).toHaveLength(1);
+
+    spy.mockRestore();
+  });
+
+  it('shares one state across every consumer', async () => {
+    await act(async () => {
+      await hydrate();
+    });
+
+    const view = await renderWithProviders(
+      <>
+        <Probe />
+        <Probe />
+      </>,
+    );
+
+    await act(async () => {
+      view.getAllByTestId('complete')[0].props.onPress();
+    });
+
+    // Completing in one is observed by the other, which was not true before.
+    for (const node of view.getAllByTestId('state')) {
+      expect(node).toHaveTextContent('seen');
+    }
+  });
+
   it('remembers that it was completed', async () => {
+    await act(async () => {
+      await hydrate();
+    });
     const view = await renderWithProviders(<Probe />);
     await waitFor(() => expect(view.getByTestId('state')).toHaveTextContent('needed'));
 
@@ -85,6 +153,9 @@ describe('showing it once', () => {
   });
 
   it('marks it seen before navigating, so a force quit does not repeat it', async () => {
+    await act(async () => {
+      await hydrate();
+    });
     const view = await renderWithProviders(<Probe />);
     await waitFor(() => expect(view.getByTestId('state')).toHaveTextContent('needed'));
 

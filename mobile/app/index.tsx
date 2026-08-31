@@ -1,38 +1,20 @@
-import { Redirect } from 'expo-router';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
-
-import { useOnboarding } from '@/features/onboarding/hooks';
-import { useSessionStore } from '@/state/session';
-import { usePalette } from '@/theme/theme';
+import { useStartup } from '@/features/startup/hooks';
+import { LaunchScreen } from '@/features/startup/LaunchScreen';
 
 /**
- * Entry point. Holds the first paint until the keychain has been read, so a
- * returning user is never shown the welcome screen for a frame before being
- * bounced home.
+ * The launch seam.
  *
- * Three destinations, in priority order: somebody signed in goes home,
- * somebody who has never seen the introduction gets it, and everybody else
- * lands on the welcome screen. The introduction is never shown to a signed-in
- * user, who has self-evidently already been through it.
+ * Every cold start passes through here, and it is where the future launch
+ * animation will live. It makes no decisions of its own: readiness and
+ * destination both come from `useStartup`, which owns the three keychain reads
+ * and the routing priority.
+ *
+ * Presentation and handoff timing live in `LaunchScreen`. Keeping that boundary
+ * separate means motion can be added there later without duplicating readiness,
+ * storage or destination logic in the route.
  */
 export default function Index() {
-  const status = useSessionStore((state) => state.status);
-  const onboarding = useOnboarding();
-  const palette = usePalette();
+  const { isReady, destination, motion } = useStartup();
 
-  if (status === 'loading' || onboarding.state === 'loading') {
-    return (
-      <View style={[styles.splash, { backgroundColor: palette.ground }]}>
-        <ActivityIndicator color={palette.primary} />
-      </View>
-    );
-  }
-
-  if (status === 'authenticated') return <Redirect href="/home" />;
-
-  return <Redirect href={onboarding.state === 'needed' ? '/onboarding' : '/welcome'} />;
+  return <LaunchScreen isReady={isReady} destination={destination} motion={motion} />;
 }
-
-const styles = StyleSheet.create({
-  splash: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-});
