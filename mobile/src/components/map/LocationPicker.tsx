@@ -100,7 +100,7 @@ export function LocationPicker({ value, onChange }: LocationPickerProps) {
             rotateEnabled={false}
             pitchEnabled={false}
             toolbarEnabled={false}
-            showsPointsOfInterest={false}
+            showsPointsOfInterests={false}
             // Tapping the map moves the pin, which is a more forgiving target
             // than dragging a small marker with a thumb.
             onPress={(event: MapPressEvent) => onChange(event.nativeEvent.coordinate)}

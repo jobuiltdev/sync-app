@@ -79,7 +79,7 @@ const styles = StyleSheet.create({
   frame: { height: 168, justifyContent: 'center', alignItems: 'center' },
   image: { width: '100%', height: 200 },
   wash: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     // A soft arc behind the plates, echoing the mockup's tinted backdrop
     // without pretending to be its artwork.
     borderRadius: radii.sheet,

@@ -164,5 +164,5 @@ export function AnimatedLaunchComposition({
 
 const styles = StyleSheet.create({
   scene: { alignItems: 'center', justifyContent: 'center' },
-  mark: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+  mark: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
 });

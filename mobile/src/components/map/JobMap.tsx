@@ -91,7 +91,7 @@ function JobMapView({ job, provider, label, height = 200, interactive = true }: 
         showsCompass={false}
         // Points of interest are noise on a dispatch map: the only places that
         // matter are already marked.
-        showsPointsOfInterest={false}
+        showsPointsOfInterests={false}
       >
         <Marker coordinate={job} tracksViewChanges={false} title={label}>
           <View style={styles.pin}>

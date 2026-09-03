@@ -273,5 +273,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   scene: { alignItems: 'center', justifyContent: 'center' },
-  mark: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+  mark: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
 });

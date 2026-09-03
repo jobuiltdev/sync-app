@@ -112,7 +112,7 @@ export function Sheet({
 
 const styles = StyleSheet.create({
   root: { flex: 1, justifyContent: 'flex-end' },
-  scrimTouch: { ...StyleSheet.absoluteFillObject },
+  scrimTouch: { ...StyleSheet.absoluteFill },
   sheet: {
     borderTopLeftRadius: radii.sheet,
     borderTopRightRadius: radii.sheet,

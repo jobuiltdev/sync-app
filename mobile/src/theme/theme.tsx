@@ -90,7 +90,10 @@ export function ThemeProvider({
     void secureStorage.set(THEME_STORAGE_KEY, next);
   }, []);
 
-  const scheme: ColorScheme = mode === 'system' ? (deviceScheme ?? 'light') : mode;
+  // useColorScheme reports 'unspecified' when the device states no preference,
+  // which reads as light here just as a null scheme used to.
+  const scheme: ColorScheme =
+    mode === 'system' ? (deviceScheme === 'dark' ? 'dark' : 'light') : mode;
 
   const value = useMemo<ThemeContextValue>(
     () => ({
